@@ -593,6 +593,36 @@ function ObmView({
               </ResponsiveContainer>
             </div>
           </ChartCard>
+          
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle className="text-base">Winkels — overzicht</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="max-h-[480px] overflow-auto rounded-md border">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-muted">
+                    <TableRow>
+                      <TableHead>Winkel</TableHead>
+                      <TableHead className="text-right">Gewonnen</TableHead>
+                      <TableHead className="text-right">Ingewisseld</TableHead>
+                      <TableHead className="text-right">Redeem rate</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {topWinkels.map((w) => (
+                      <TableRow key={w.winkel}>
+                        <TableCell className="font-medium">{w.winkel}</TableCell>
+                        <TableCell className="text-right tabular-nums">{w.gewonnen}</TableCell>
+                        <TableCell className="text-right tabular-nums">{w.ingewisseld}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtPct(pct(w.ingewisseld, w.gewonnen))}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         </>
       ) : (
         <>
@@ -704,8 +734,8 @@ function WinkelierView({
     return Array.from(m.values()).sort((a, b) => b.gewonnen - a.gewonnen);
   }, [rows]);
 
-  const trend = useMemo(() => getRedeemTrend(rows.filter(isRedeemed)), [rows]);
-  const trendB = useMemo(() => getRedeemTrend(rowsB.filter(isRedeemed)), [rowsB]);
+  const trend = useMemo(() => getRedeemTrend(rows.filter(isWon)), [rows]);
+  const trendB = useMemo(() => getRedeemTrend(rowsB.filter(isWon)), [rowsB]);
   const compareTrend = useMemo(
     () => mergeTrends(trend, trendB, campaignA.name, campaignB.name),
     [trend, trendB, campaignA.name, campaignB.name],

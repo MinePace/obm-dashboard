@@ -24,29 +24,155 @@ export type Filters = {
   kanaal?: string;
 };
 
+export type StoreSegment = 
+  | "Levensmiddelen" 
+  | "Persoonlijke verzorging" 
+  | "Vrije tijd" 
+  | "Overige winkels" 
+  | "Elektronica" 
+  | "Fietsen" 
+  | "Wonen en warenhuis" 
+  | "Damesmode" 
+  | "Optiek" 
+  | "Mode algemeen" 
+  | "Schoenen" 
+  | "Lunchroom" 
+  | "Restaurant" 
+  | "Dienst" 
+  | "Geld,werk, woning";
+
+export type Store = {
+  id: string;
+  name: string;
+  segment: StoreSegment;
+};
+
 export type CampaignOption = {
   id: string;
   name: string;
   rows: Row[];
   totalCouponsIssued: number;
+  participatingStoreIds: string[];
 };
 
-export const campaigns: CampaignOption[] = [
-  {
-    id: "winkel-weken",
-    name: "WINkel weken",
-    rows: winkelWeken as Row[],
-    totalCouponsIssued: 7390,
-  },
-  {
-    id: "lente-geluk",
-    name: "Lente Geluk",
-    rows: lenteGeluk as Row[],
-    totalCouponsIssued: 12500,
-  },
-];
+export type ShoppingCenter = {
+  id: string;
+  name: string;
+  totalStores: number;
+  stores: Store[];
+  campaigns: CampaignOption[];
+};
+
+export const centrumNieuwVennep: ShoppingCenter = {
+  id: "centrum-nieuw-vennep",
+  name: "Centrum Nieuw-Vennep",
+  totalStores: 148,
+
+  stores: [
+    { id: "dirk", name: "Dirk", segment: "Levensmiddelen" },
+    { id: "jumbo", name: "Jumbo", segment: "Levensmiddelen" },
+    { id: "hema", name: "Hema", segment: "Wonen en warenhuis" },
+    { id: "orries", name: "Orries restaurant", segment: "Lunchroom" },
+    { id: "mood4", name: "Mood4", segment: "Levensmiddelen" },
+    { id: "shoeby", name: "Shoeby", segment: "Mode algemeen" },
+    { id: "janosik", name: "Janosik Markt", segment: "Levensmiddelen" },
+    { id: "roti2day", name: "Roti2Day", segment: "Lunchroom" },
+    { id: "dominos", name: "Domino's Pizza", segment: "Lunchroom" },
+    { id: "kriek-optiek", name: "Kriek Optiek", segment: "Optiek" },
+    { id: "fix-my-phone", name: "Fix My Phone", segment: "Elektronica" },
+    { id: "ami-kappers", name: "Ami kappers", segment: "Persoonlijke verzorging" },
+    { id: "handmade-hobby", name: "Handmade Hobby", segment: "Wonen en warenhuis" },
+    { id: "cardstyle", name: "Cardstyle", segment: "Overige winkels" },
+    { id: "kapsalon-perdaan", name: "Kapsalon Perdaan", segment: "Persoonlijke verzorging" },
+    { id: "haarstudio-unique", name: "HaarstudioUnique", segment: "Persoonlijke verzorging" },
+    { id: "chris-hair", name: "Chris Hair Beauty Nails", segment: "Persoonlijke verzorging" },
+    { id: "snoep-kadoboetiek", name: "Snoep & Kadoboetiek", segment: "Overige winkels" },
+  ],
+
+  campaigns: [
+    {
+      id: "winkel-weken",
+      name: "WINkel weken",
+      rows: winkelWeken as Row[],
+      totalCouponsIssued: 7390,
+      participatingStoreIds: [
+        "dirk",
+        "jumbo",
+        "hema",
+        "orries",
+        "shoeby",
+        "janosik",
+        "roti2day",
+        "dominos",
+        "kriek-optiek",
+        "fix-my-phone",
+        "ami-kappers",
+        "handmade-hobby",
+        "cardstyle",
+        "kapsalon-perdaan",
+        "haarstudio-unique",
+        "chris-hair",
+        "snoep-kadoboetiek",
+      ],
+    },
+    {
+      id: "lente-geluk",
+      name: "Lente Geluk",
+      rows: lenteGeluk as Row[],
+      totalCouponsIssued: 12500,
+      participatingStoreIds: [
+        "jumbo",
+        "hema",
+        "orries",
+        "mood4",
+        "shoeby",
+        "roti2day",
+        "dominos",
+        "fix-my-phone",
+        "cardstyle",
+      ],
+    },
+  ],
+};
+
+export const centers = [centrumNieuwVennep];
+
+export const campaigns: CampaignOption[] = centrumNieuwVennep.campaigns;
 
 export const data: Row[] = campaigns[0].rows;
+
+export function getParticipatingStores(
+  center: ShoppingCenter,
+  campaign: CampaignOption
+): Store[] {
+  return center.stores.filter((store) =>
+    campaign.participatingStoreIds.includes(store.id)
+  );
+}
+
+export function getStoreSegmentOverview(
+  center: ShoppingCenter,
+  campaign: CampaignOption
+): { segment: string; count: number }[] {
+  const stores = getParticipatingStores(center, campaign);
+
+  return Object.values(
+    stores.reduce<Record<string, { segment: string; count: number }>>(
+      (acc, store) => {
+        if (!acc[store.segment]) {
+          acc[store.segment] = {
+            segment: store.segment,
+            count: 0,
+          };
+        }
+
+        acc[store.segment].count += 1;
+        return acc;
+      },
+      {}
+    )
+  );
+}
 
 export const isWon = (r: Row) =>
   r.Prijsgewonnen || ["won", "claimed", "redeemed"].includes(r.status);
