@@ -22,6 +22,7 @@ export type Filters = {
   coupon_type?: string;
   leeftijdsgroep?: string;
   kanaal?: string;
+  segment?: string;
 };
 
 export type StoreSegment = 
@@ -69,7 +70,7 @@ export const centrumNieuwVennep: ShoppingCenter = {
   totalStores: 148,
 
   stores: [
-    { id: "dirk", name: "Dirk", segment: "Levensmiddelen" },
+    { id: "dirk", name: "Dirk De Symfonie", segment: "Levensmiddelen" },
     { id: "jumbo", name: "Jumbo", segment: "Levensmiddelen" },
     { id: "hema", name: "Hema", segment: "Wonen en warenhuis" },
     { id: "orries", name: "Orries restaurant", segment: "Lunchroom" },
@@ -202,6 +203,13 @@ export function applyFilters(rows: Row[], f: Filters): Row[] {
     if (f.coupon_type && r.coupon_type !== f.coupon_type) return false;
     if (f.leeftijdsgroep && r.leeftijdsgroep !== f.leeftijdsgroep) return false;
     if (f.kanaal && r.kanaal !== f.kanaal) return false;
+    if (f.segment) {
+      const store = centrumNieuwVennep.stores.find(
+        (s) => s.name === r.winkel_inwissel
+      );
+
+      if (!store || store.segment !== f.segment) return false;
+    }
 
     return true;
   });

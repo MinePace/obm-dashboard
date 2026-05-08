@@ -1,0 +1,152 @@
+[
+  {
+    "campaignId": "winkel-weken",
+    "sources": [
+      {
+        "source": "Instagram",
+        "impressions": 18500,
+        "clicks": 2240,
+        "landingPageVisits": 1980,
+        "formStarts": 1420,
+        "formSubmits": 980,
+        "couponWins": 310,
+        "redeemed": 54
+      },
+      {
+        "source": "Facebook",
+        "impressions": 14200,
+        "clicks": 1340,
+        "landingPageVisits": 1180,
+        "formStarts": 810,
+        "formSubmits": 610,
+        "couponWins": 190,
+        "redeemed": 31
+      },
+      {
+        "source": "Flyer",
+        "impressions": 5000,
+        "clicks": 740,
+        "landingPageVisits": 690,
+        "formStarts": 520,
+        "formSubmits": 430,
+        "couponWins": 150,
+        "redeemed": 27
+      },
+      {
+        "source": "Website",
+        "impressions": 3200,
+        "clicks": 410,
+        "landingPageVisits": 390,
+        "formStarts": 280,
+        "formSubmits": 210,
+        "couponWins": 70,
+        "redeemed": 11
+      },
+      {
+        "source": "Google Ads",
+        "impressions": 9800,
+        "clicks": 890,
+        "landingPageVisits": 820,
+        "formStarts": 530,
+        "formSubmits": 360,
+        "couponWins": 115,
+        "redeemed": 18
+      },
+      {
+        "source": "TikTok",
+        "impressions": 22000,
+        "clicks": 2760,
+        "landingPageVisits": 2480,
+        "formStarts": 1320,
+        "formSubmits": 760,
+        "couponWins": 230,
+        "redeemed": 36
+      },
+      {
+        "source": "QR poster in centrum",
+        "impressions": 4200,
+        "clicks": 620,
+        "landingPageVisits": 590,
+        "formStarts": 460,
+        "formSubmits": 390,
+        "couponWins": 135,
+        "redeemed": 29
+      }
+    ]
+  },
+  {
+    "campaignId": "lente-geluk",
+    "sources": [
+      {
+        "source": "Instagram",
+        "impressions": 24500,
+        "clicks": 3360,
+        "landingPageVisits": 3010,
+        "formStarts": 2210,
+        "formSubmits": 1640,
+        "couponWins": 520,
+        "redeemed": 96
+      },
+      {
+        "source": "Facebook",
+        "impressions": 16800,
+        "clicks": 1720,
+        "landingPageVisits": 1530,
+        "formStarts": 1090,
+        "formSubmits": 820,
+        "couponWins": 260,
+        "redeemed": 49
+      },
+      {
+        "source": "Flyer",
+        "impressions": 6500,
+        "clicks": 960,
+        "landingPageVisits": 910,
+        "formStarts": 720,
+        "formSubmits": 610,
+        "couponWins": 205,
+        "redeemed": 45
+      },
+      {
+        "source": "Website",
+        "impressions": 4100,
+        "clicks": 520,
+        "landingPageVisits": 500,
+        "formStarts": 360,
+        "formSubmits": 290,
+        "couponWins": 95,
+        "redeemed": 17
+      },
+      {
+        "source": "Google Ads",
+        "impressions": 12800,
+        "clicks": 1290,
+        "landingPageVisits": 1180,
+        "formStarts": 810,
+        "formSubmits": 590,
+        "couponWins": 185,
+        "redeemed": 34
+      },
+      {
+        "source": "TikTok",
+        "impressions": 30500,
+        "clicks": 4120,
+        "landingPageVisits": 3690,
+        "formStarts": 2050,
+        "formSubmits": 1260,
+        "couponWins": 380,
+        "redeemed": 68
+      },
+      {
+        "source": "QR poster in centrum",
+        "impressions": 5200,
+        "clicks": 830,
+        "landingPageVisits": 790,
+        "formStarts": 630,
+        "formSubmits": 540,
+        "couponWins": 175,
+        "redeemed": 41
+      }
+    ]
+  }
+]

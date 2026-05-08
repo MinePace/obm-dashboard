@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,19 +35,29 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Info, Download } from "lucide-react";
+import { Download, Info } from "lucide-react";
 import {
   applyFilters,
   campaigns,
+  centrumNieuwVennep,
   exportCsv,
-  Filters,
+  type Filters,
   fmtPct,
+  getParticipatingStores,
+  getStoreSegmentOverview,
   isClaimed,
   isRedeemed,
   isWon,
   pct,
   uniqueSorted,
 } from "@/lib/campaign";
+import {
+  getChannelPerformance,
+  getDropOffData,
+  getFunnelSteps,
+  getTrafficForCampaign,
+  sumTraffic,
+} from "@/lib/traffic-source";
 import { Kpi } from "@/components/Kpi";
 
 type Campaign = (typeof campaigns)[number];
@@ -60,71 +70,39 @@ const CHART_COLORS = [
   "hsl(var(--chart-5))",
 ];
 
-function getStats(rows: Campaign["rows"], totalCouponsIssued: number) {
-  const won = rows.filter(isWon).length;
-  const claimed = rows.filter(isClaimed).length;
-  const redeemed = rows.filter(isRedeemed).length;
-
-  return {
-    issued: totalCouponsIssued,
-    won,
-    claimed,
-    redeemed,
-    winRate: pct(won, totalCouponsIssued),
-    claimRate: pct(claimed, won),
-    redeemRate: pct(redeemed, won),
-  };
+function getWeekStart(date: string) {
+  const dt = new Date(date);
+  const day = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() - (day - 1));
+  return dt.toISOString().slice(0, 10);
 }
 
-function getRedeemTrend(rows: Campaign["rows"]) {
-  const byWeek = new Map<string, number>();
-
-  for (const r of rows) {
-    const d = r["Datum uitgeleverd"];
-    if (!d) continue;
-
-    const dt = new Date(d);
-    const day = dt.getUTCDay() || 7;
-    dt.setUTCDate(dt.getUTCDate() - (day - 1));
-
-    const key = dt.toISOString().slice(0, 10);
-    byWeek.set(key, (byWeek.get(key) || 0) + 1);
-  }
-
-  return Array.from(byWeek.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([week, value]) => ({ week, ingewisseld: value }));
-}
-
-function mergeTrends(
-  trendA: { week: string; ingewisseld: number }[],
-  trendB: { week: string; ingewisseld: number }[],
-  labelA = "Campagne A",
-  labelB = "Campagne B",
-) {
-  const weeks = Array.from(new Set([...trendA.map((t) => t.week), ...trendB.map((t) => t.week)])).sort();
-
-  return weeks.map((week) => ({
-    week,
-    [labelA]: trendA.find((t) => t.week === week)?.ingewisseld ?? 0,
-    [labelB]: trendB.find((t) => t.week === week)?.ingewisseld ?? 0,
-  }));
-}
-
-function getTopWinkels(rows: Campaign["rows"]) {
-  const m = new Map<string, { winkel: string; gewonnen: number; ingewisseld: number }>();
-
-  for (const r of rows) {
-    const w = r.winkel_inwissel;
-    if (!w) continue;
-
-    const e = m.get(w) || { winkel: w, gewonnen: 0, ingewisseld: 0 };
-    if (isWon(r)) e.gewonnen += 1;
-    if (isRedeemed(r)) e.ingewisseld += 1;
-    m.set(w, e);
-  }
-
-  return Array.from(m.values()).sort((a, b) => b.ingewisseld - a.ingewisseld);
+function CampaignSelect({
+  campaignId,
+  setCampaignId,
+  label = "Campagne",
+}: {
+  campaignId: string;
+  setCampaignId: (id: string) => void;
+  label?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs">{label}</Label>
+      <Select value={campaignId} onValueChange={setCampaignId}>
+        <SelectTrigger className="w-full md:w-72">
+          <SelectValue placeholder="Selecteer campagne" />
+        </SelectTrigger>
+        <SelectContent>
+          {campaigns.map((campaign) => (
+            <SelectItem key={campaign.id} value={campaign.id}>
+              {campaign.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
 
 function FilterBar({
@@ -139,6 +117,7 @@ function FilterBar({
     coupon_types: string[];
     leeftijden: string[];
     kanalen: string[];
+    segments: string[];
   };
 }) {
   const ALL = "__all__";
@@ -203,94 +182,35 @@ function FilterBar({
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-xs">Kanaal</Label>
+          <Label className="text-xs">Segment</Label>
+
           <Select
-            value={filters.kanaal || ALL}
-            onValueChange={(v) => update("kanaal", v === ALL ? undefined : v)}
+            value={filters.segment || ALL}
+            onValueChange={(v) =>
+              update("segment", v === ALL ? undefined : v)
+            }
           >
             <SelectTrigger>
-              <SelectValue placeholder="Alle" />
+              <SelectValue placeholder="Alle segmenten" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>Alle</SelectItem>
-              {options.kanalen.map((w) => (
-                <SelectItem key={w} value={w}>{w}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
 
-function CampaignControls({
-  isCompareMode,
-  setIsCompareMode,
-  campaignAId,
-  setCampaignAId,
-  campaignBId,
-  setCampaignBId,
-}: {
-  isCompareMode: boolean;
-  setIsCompareMode: (value: boolean) => void;
-  campaignAId: string;
-  setCampaignAId: (id: string) => void;
-  campaignBId: string;
-  setCampaignBId: (id: string) => void;
-}) {
-  return (
-    <Card>
-      <CardContent className="grid gap-4 p-4 md:grid-cols-3">
-        <label className="flex items-center gap-3 rounded-md border bg-secondary/40 px-4 py-3">
-          <input
-            type="checkbox"
-            checked={isCompareMode}
-            onChange={(e) => setIsCompareMode(e.target.checked)}
-            className="h-4 w-4 accent-[#0B0989]"
-          />
-          <span className="text-sm font-medium">Vergelijk campagnes</span>
-        </label>
-
-        <div className="space-y-1.5">
-          <Label className="text-xs">{isCompareMode ? "Campagne A" : "Campagne"}</Label>
-          <Select value={campaignAId} onValueChange={setCampaignAId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Selecteer campagne" />
-            </SelectTrigger>
             <SelectContent>
-              {campaigns.map((campaign) => (
-                <SelectItem key={campaign.id} value={campaign.id}>
-                  {campaign.name}
+              <SelectItem value={ALL}>Alle segmenten</SelectItem>
+
+              {options.segments.map((segment) => (
+                <SelectItem key={segment} value={segment}>
+                  {segment}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
-
-        {isCompareMode && (
-          <div className="space-y-1.5">
-            <Label className="text-xs">Campagne B</Label>
-            <Select value={campaignBId} onValueChange={setCampaignBId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecteer campagne" />
-              </SelectTrigger>
-              <SelectContent>
-                {campaigns.map((campaign) => (
-                  <SelectItem key={campaign.id} value={campaign.id}>
-                    {campaign.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
 }
 
-function InfoTip({ children }: { children: React.ReactNode }) {
+function InfoTip({ children }: { children: ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -311,8 +231,8 @@ function ChartCard({
 }: {
   title: string;
   info?: string;
-  children: React.ReactNode;
-  action?: React.ReactNode;
+  children: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <Card>
@@ -328,150 +248,95 @@ function ChartCard({
   );
 }
 
-function CompareKpiTable({
-  campaignA,
-  campaignB,
-  statsA,
-  statsB,
-}: {
-  campaignA: Campaign;
-  campaignB: Campaign;
-  statsA: ReturnType<typeof getStats>;
-  statsB: ReturnType<typeof getStats>;
-}) {
-  const rows = [
-    {
-      label: "Coupons uitgegeven",
-      a: statsA.issued.toLocaleString("nl-NL"),
-      b: statsB.issued.toLocaleString("nl-NL"),
-      diff: (statsB.issued - statsA.issued).toLocaleString("nl-NL"),
-    },
-    {
-      label: "Coupons gewonnen",
-      a: statsA.won.toLocaleString("nl-NL"),
-      b: statsB.won.toLocaleString("nl-NL"),
-      diff: (statsB.won - statsA.won).toLocaleString("nl-NL"),
-    },
-    {
-      label: "Coupons claimed",
-      a: statsA.claimed.toLocaleString("nl-NL"),
-      b: statsB.claimed.toLocaleString("nl-NL"),
-      diff: (statsB.claimed - statsA.claimed).toLocaleString("nl-NL"),
-    },
-    {
-      label: "Coupons ingewisseld",
-      a: statsA.redeemed.toLocaleString("nl-NL"),
-      b: statsB.redeemed.toLocaleString("nl-NL"),
-      diff: (statsB.redeemed - statsA.redeemed).toLocaleString("nl-NL"),
-    },
-    {
-      label: "Win rate",
-      a: fmtPct(statsA.winRate),
-      b: fmtPct(statsB.winRate),
-      diff: fmtPct(statsB.winRate - statsA.winRate),
-    },
-    {
-      label: "Redeem rate",
-      a: fmtPct(statsA.redeemRate),
-      b: fmtPct(statsB.redeemRate),
-      diff: fmtPct(statsB.redeemRate - statsA.redeemRate),
-    },
-  ];
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Campagne vergelijking</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="overflow-auto rounded-md border">
-          <Table>
-            <TableHeader className="bg-muted">
-              <TableRow>
-                <TableHead>KPI</TableHead>
-                <TableHead className="text-right">{campaignA.name}</TableHead>
-                <TableHead className="text-right">{campaignB.name}</TableHead>
-                <TableHead className="text-right">Verschil B - A</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.label}>
-                  <TableCell className="font-medium">{row.label}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.a}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.b}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.diff}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 /* ───────────────────────────── OBM VIEW ───────────────────────────── */
 
-function ObmView({
-  campaignA,
-  campaignB,
-  isCompareMode,
-}: {
-  campaignA: Campaign;
-  campaignB: Campaign;
-  isCompareMode: boolean;
-}) {
+function CentrumView() {
   const [filters, setFilters] = useState<Filters>({});
+  const [isCompareMode, setIsCompareMode] = useState(false);
+  const [campaignId, setCampaignId] = useState(campaigns[0].id);
+  const [compareCampaignId, setCompareCampaignId] = useState(
+    campaigns[1]?.id ?? campaigns[0].id
+  );
 
-  const data = campaignA.rows;
-  const dataB = campaignB.rows;
+  const selectedCampaign =
+    campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
+
+  const compareCampaign =
+  campaigns.find((campaign) => campaign.id === compareCampaignId) ?? campaigns[1] ?? campaigns[0];
+
+  const compareData = compareCampaign.rows;
+  const compareFiltered = useMemo(
+    () => applyFilters(compareData, filters),
+    [compareData, filters]
+  );
+
+  const compareWon = compareFiltered.filter(isWon).length;
+  const compareRedeemed = compareFiltered.filter(isRedeemed).length;
+  const compareRedeemRate = pct(compareRedeemed, compareWon);
+
+  const data = selectedCampaign.rows;
+
+  const participatingStores = useMemo(
+    () => getParticipatingStores(centrumNieuwVennep, selectedCampaign),
+    [selectedCampaign],
+  );
+
+  const segmentOverview = useMemo(
+    () => getStoreSegmentOverview(centrumNieuwVennep, selectedCampaign),
+    [selectedCampaign],
+  );
 
   const options = useMemo(
     () => ({
-      winkels: uniqueSorted([...data.map((r) => r.winkel_inwissel), ...dataB.map((r) => r.winkel_inwissel)]),
-      coupon_types: uniqueSorted([...data.map((r) => r.coupon_type), ...dataB.map((r) => r.coupon_type)]),
-      leeftijden: uniqueSorted([...data.map((r) => r.leeftijdsgroep), ...dataB.map((r) => r.leeftijdsgroep)]),
-      kanalen: uniqueSorted([...data.map((r) => r.kanaal), ...dataB.map((r) => r.kanaal)]),
+      winkels: uniqueSorted(data.map((r) => r.winkel_inwissel)),
+      coupon_types: uniqueSorted(data.map((r) => r.coupon_type)),
+      leeftijden: uniqueSorted(data.map((r) => r.leeftijdsgroep)),
+      kanalen: uniqueSorted(data.map((r) => r.kanaal)),
+      segments: uniqueSorted(
+        centrumNieuwVennep.stores.map((s) => s.segment)
+      ),
     }),
-    [data, dataB],
+    [data],
   );
 
   const filtered = useMemo(() => applyFilters(data, filters), [data, filters]);
-  const filteredB = useMemo(() => applyFilters(dataB, filters), [dataB, filters]);
 
-  const stats = getStats(filtered, campaignA.totalCouponsIssued);
-  const statsB = getStats(filteredB, campaignB.totalCouponsIssued);
+  const won = filtered.filter(isWon).length;
+  const claimed = filtered.filter(isClaimed).length;
+  const redeemed = filtered.filter(isRedeemed).length;
+  const redeemRate = pct(redeemed, won);
 
-  const trend = useMemo(() => getRedeemTrend(filtered), [filtered]);
-  const trendB = useMemo(() => getRedeemTrend(filteredB), [filteredB]);
-  const compareTrend = useMemo(
-    () => mergeTrends(trend, trendB, campaignA.name, campaignB.name),
-    [trend, trendB, campaignA.name, campaignB.name],
-  );
+  const trend = useMemo(() => {
+    const byWeek = new Map<string, number>();
 
-  const topWinkels = useMemo(() => getTopWinkels(filtered), [filtered]);
-  const topWinkelsB = useMemo(() => getTopWinkels(filteredB), [filteredB]);
+    for (const r of filtered) {
+      const d = r["Datum uitgeleverd"];
+      if (!d) continue;
 
-  const compareWinkels = useMemo(() => {
-    const all = Array.from(new Set([...topWinkels.map((w) => w.winkel), ...topWinkelsB.map((w) => w.winkel)]));
+      const key = getWeekStart(d);
+      byWeek.set(key, (byWeek.get(key) || 0) + 1);
+    }
 
-    return all
-      .map((winkel) => {
-        const a = topWinkels.find((w) => w.winkel === winkel);
-        const b = topWinkelsB.find((w) => w.winkel === winkel);
+    return Array.from(byWeek.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([week, value]) => ({ week, aanmeldingen: value }));
+  }, [filtered]);
 
-        return {
-          winkel,
-          [`${campaignA.name} gewonnen`]: a?.gewonnen ?? 0,
-          [`${campaignA.name} ingewisseld`]: a?.ingewisseld ?? 0,
-          [`${campaignB.name} gewonnen`]: b?.gewonnen ?? 0,
-          [`${campaignB.name} ingewisseld`]: b?.ingewisseld ?? 0,
-          verschil: (b?.ingewisseld ?? 0) - (a?.ingewisseld ?? 0),
-        };
-      })
-      .sort((a, b) => Math.abs(b.verschil) - Math.abs(a.verschil));
-  }, [topWinkels, topWinkelsB, campaignA.name, campaignB.name]);
+  const topWinkels = useMemo(() => {
+    const m = new Map<string, { winkel: string; gewonnen: number; ingewisseld: number }>();
+
+    for (const r of filtered) {
+      const w = r.winkel_inwissel;
+      if (!w) continue;
+
+      const e = m.get(w) || { winkel: w, gewonnen: 0, ingewisseld: 0 };
+      if (isWon(r)) e.gewonnen += 1;
+      if (isRedeemed(r)) e.ingewisseld += 1;
+      m.set(w, e);
+    }
+
+    return Array.from(m.values()).sort((a, b) => b.ingewisseld - a.ingewisseld);
+  }, [filtered]);
 
   const ageGender = useMemo(() => {
     const ages = uniqueSorted(filtered.filter(isWon).map((r) => r.leeftijdsgroep));
@@ -495,234 +360,278 @@ function ObmView({
 
   return (
     <div className="space-y-6">
+      <Card>
+        <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end md:justify-between">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
+            <CampaignSelect
+              campaignId={campaignId}
+              setCampaignId={(id) => {
+                setCampaignId(id);
+                setFilters({});
+              }}
+              label={isCompareMode ? "Campagne A" : "Campagne"}
+            />
+
+            {isCompareMode && (
+              <CampaignSelect
+                campaignId={compareCampaignId}
+                setCampaignId={setCompareCampaignId}
+                label="Campagne B"
+              />
+            )}
+
+            <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
+              <input
+                type="checkbox"
+                checked={isCompareMode}
+                onChange={(e) => setIsCompareMode(e.target.checked)}
+              />
+              Vergelijk campagnes
+            </label>
+          </div>
+
+          <div className="text-sm text-muted-foreground">
+            Winkelcentrum:{" "}
+            <span className="font-medium text-foreground">
+              {centrumNieuwVennep.name}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
       <FilterBar filters={filters} setFilters={setFilters} options={options} />
 
-      {!isCompareMode ? (
-        <>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <Kpi
-              label="Coupons uitgegeven"
-              value={stats.issued.toLocaleString("nl-NL")}
-              hint="Totaal aantal uitgegeven coupons"
-              tone="primary"
-            />
-            <Kpi
-              label="Coupons gewonnen"
-              value={stats.won.toLocaleString("nl-NL")}
-              hint="Prijsgewonnen of status won/claimed/redeemed"
-              tone="primary"
-            />
-            <Kpi
-              label="Coupons ingewisseld"
-              value={stats.redeemed.toLocaleString("nl-NL")}
-              hint="status = redeemed"
-              tone="accent"
-            />
-            <Kpi
-              label="Redeem rate"
-              value={fmtPct(stats.redeemRate)}
-              hint="ingewisseld ÷ gewonnen"
-              tone="success"
-            />
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
+        <Kpi
+          label="Totaal winkels"
+          value={centrumNieuwVennep.totalStores.toLocaleString("nl-NL")}
+          hint="Aantal winkels in het centrum"
+          tone="primary"
+        />
+        <Kpi
+          label="Deelnemende winkels"
+          value={participatingStores.length.toLocaleString("nl-NL")}
+          hint="Aantal winkels dat meedoet aan deze campagne"
+          tone="accent"
+        />
+        <Kpi
+          label="Coupons uitgegeven"
+          value={selectedCampaign.totalCouponsIssued.toLocaleString("nl-NL")}
+          hint="Totaal aantal uitgegeven coupons"
+          tone="primary"
+        />
+        <Kpi
+          label="Coupons gewonnen"
+          value={won.toLocaleString("nl-NL")}
+          hint="Prijsgewonnen of status won/claimed/redeemed"
+          tone="primary"
+        />
+        <Kpi
+          label="Coupons ingewisseld"
+          value={redeemed.toLocaleString("nl-NL")}
+          hint="status = redeemed"
+          tone="accent"
+        />
+        <Kpi
+          label="Redeem rate"
+          value={fmtPct(redeemRate)}
+          hint="ingewisseld ÷ gewonnen"
+          tone="success"
+        />
+      </div>
+
+      {isCompareMode && (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            Vergelijking: {selectedCampaign.name} vs {compareCampaign.name}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-auto rounded-md border">
+            <Table>
+              <TableHeader className="bg-muted">
+                <TableRow>
+                  <TableHead>KPI</TableHead>
+                  <TableHead className="text-right">{selectedCampaign.name}</TableHead>
+                  <TableHead className="text-right">{compareCampaign.name}</TableHead>
+                  <TableHead className="text-right">Verschil</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow>
+                  <TableCell>Coupons gewonnen</TableCell>
+                  <TableCell className="text-right">{won}</TableCell>
+                  <TableCell className="text-right">{compareWon}</TableCell>
+                  <TableCell className="text-right">{won - compareWon}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Coupons ingewisseld</TableCell>
+                  <TableCell className="text-right">{redeemed}</TableCell>
+                  <TableCell className="text-right">{compareRedeemed}</TableCell>
+                  <TableCell className="text-right">{redeemed - compareRedeemed}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Redeem rate</TableCell>
+                  <TableCell className="text-right">{fmtPct(redeemRate)}</TableCell>
+                  <TableCell className="text-right">{fmtPct(compareRedeemRate)}</TableCell>
+                  <TableCell className="text-right">
+                    {fmtPct(redeemRate - compareRedeemRate)}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
+        </CardContent>
+      </Card>
+    )}
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <ChartCard title="Inwisselingen per week" info="Op basis van 'Datum opgehaald'.">
-              <div className="h-72">
-                <ResponsiveContainer>
-                  <LineChart data={trend} margin={{ left: 0, right: 16, top: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <RTooltip />
-                    <Line type="monotone" dataKey="ingewisseld" stroke="#00E5AC" strokeWidth={2.5} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </ChartCard>
-
-            <ChartCard title="Deelname per leeftijd × gender" info="Gewonnen coupons.">
-              <div className="h-72">
-                <ResponsiveContainer>
-                  <BarChart data={ageGender}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="leeftijd" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <RTooltip />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    {genders.map((g, i) => (
-                      <Bar key={g} dataKey={g} stackId="a" fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </ChartCard>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ChartCard title="Aanmeldingen per week" info="Op basis van 'Datum uitgeleverd'.">
+          <div className="h-72">
+            <ResponsiveContainer>
+              <LineChart data={trend} margin={{ left: 0, right: 16, top: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <RTooltip />
+                <Line type="monotone" dataKey="aanmeldingen" stroke="#00E5AC" strokeWidth={2.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
+        </ChartCard>
 
-          <ChartCard
-            title="Top 10 winkels — coupons ingewisseld"
-            action={
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  exportCsv(
-                    topWinkels.map((w) => ({
-                      winkel: w.winkel,
-                      gewonnen: w.gewonnen,
-                      ingewisseld: w.ingewisseld,
-                      redeem_rate_pct: pct(w.ingewisseld, w.gewonnen).toFixed(1),
-                    })),
-                    "winkels.csv",
-                  )
-                }
-              >
-                <Download className="mr-2 h-4 w-4" /> CSV
-              </Button>
+        <ChartCard title="Segmentoverzicht" info="Verdeling van deelnemende winkels per segment.">
+          <div className="h-72">
+            <ResponsiveContainer>
+              <BarChart data={segmentOverview} margin={{ left: 0, right: 16, top: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="segment" tick={{ fontSize: 11 }} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                <RTooltip />
+                <Bar dataKey="count" name="Aantal winkels" fill="#0B0989" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+
+        <ChartCard title="Deelname per leeftijd × gender" info="Gewonnen coupons.">
+          <div className="h-72">
+            <ResponsiveContainer>
+              <BarChart data={ageGender}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="leeftijd" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <RTooltip />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {genders.map((g, i) => (
+                  <Bar key={g} dataKey={g} stackId="a" fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+      </div>
+
+      <ChartCard
+        title="Top 10 winkels — coupons ingewisseld"
+        action={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              exportCsv(
+                topWinkels.map((w) => ({
+                  winkel: w.winkel,
+                  gewonnen: w.gewonnen,
+                  ingewisseld: w.ingewisseld,
+                  redeem_rate_pct: pct(w.ingewisseld, w.gewonnen).toFixed(1),
+                })),
+                "winkels.csv",
+              )
             }
           >
-            <div className="h-80">
-              <ResponsiveContainer>
-                <BarChart data={topWinkels.slice(0, 10)} layout="vertical" margin={{ left: 80 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis dataKey="winkel" type="category" tick={{ fontSize: 11 }} width={140} />
-                  <RTooltip />
-                  <Bar dataKey="ingewisseld" fill="#0B0989" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-          
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-base">Winkels — overzicht</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="max-h-[480px] overflow-auto rounded-md border">
-                <Table>
-                  <TableHeader className="sticky top-0 bg-muted">
-                    <TableRow>
-                      <TableHead>Winkel</TableHead>
-                      <TableHead className="text-right">Gewonnen</TableHead>
-                      <TableHead className="text-right">Ingewisseld</TableHead>
-                      <TableHead className="text-right">Redeem rate</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {topWinkels.map((w) => (
-                      <TableRow key={w.winkel}>
-                        <TableCell className="font-medium">{w.winkel}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w.gewonnen}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w.ingewisseld}</TableCell>
-                        <TableCell className="text-right tabular-nums">{fmtPct(pct(w.ingewisseld, w.gewonnen))}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        </>
-      ) : (
-        <>
-          <CompareKpiTable campaignA={campaignA} campaignB={campaignB} statsA={stats} statsB={statsB} />
+            <Download className="mr-2 h-4 w-4" /> CSV
+          </Button>
+        }
+      >
+        <div className="h-80">
+          <ResponsiveContainer>
+            <BarChart data={topWinkels.slice(0, 10)} layout="vertical" margin={{ left: 80 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis type="number" tick={{ fontSize: 11 }} />
+              <YAxis dataKey="winkel" type="category" tick={{ fontSize: 11 }} width={140} />
+              <RTooltip />
+              <Bar dataKey="ingewisseld" fill="#0B0989" radius={[0, 6, 6, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </ChartCard>
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <Kpi label="A redeem rate" value={fmtPct(stats.redeemRate)} hint={campaignA.name} tone="primary" />
-            <Kpi label="B redeem rate" value={fmtPct(statsB.redeemRate)} hint={campaignB.name} tone="accent" />
-            <Kpi label="Verschil inwisselingen" value={(statsB.redeemed - stats.redeemed).toLocaleString("nl-NL")} hint="Campagne B - Campagne A" tone="success" />
-            <Kpi label="Verschil redeem rate" value={fmtPct(statsB.redeemRate - stats.redeemRate)} hint="Campagne B - Campagne A" tone="success" />
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-base">Winkels — overzicht</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="max-h-[480px] overflow-auto rounded-md border">
+            <Table>
+              <TableHeader className="sticky top-0 bg-muted">
+                <TableRow>
+                  <TableHead>Winkel</TableHead>
+                  <TableHead className="text-right">Gewonnen</TableHead>
+                  <TableHead className="text-right">Ingewisseld</TableHead>
+                  <TableHead className="text-right">Redeem rate</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {topWinkels.map((w) => (
+                  <TableRow key={w.winkel}>
+                    <TableCell className="font-medium">{w.winkel}</TableCell>
+                    <TableCell className="text-right tabular-nums">{w.gewonnen}</TableCell>
+                    <TableCell className="text-right tabular-nums">{w.ingewisseld}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtPct(pct(w.ingewisseld, w.gewonnen))}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
-
-          <ChartCard title="Inwisselingen per week — vergelijking" info="Beide campagnes met dezelfde filters.">
-            <div className="h-80">
-              <ResponsiveContainer>
-                <LineChart data={compareTrend} margin={{ left: 0, right: 16, top: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <RTooltip />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey={campaignA.name} stroke="#0B0989" strokeWidth={2.5} dot={false} />
-                  <Line type="monotone" dataKey={campaignB.name} stroke="#00E5AC" strokeWidth={2.5} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Winkels — vergelijking</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="max-h-[480px] overflow-auto rounded-md border">
-                <Table>
-                  <TableHeader className="sticky top-0 bg-muted">
-                    <TableRow>
-                      <TableHead>Winkel</TableHead>
-                      <TableHead className="text-right">A gewonnen</TableHead>
-                      <TableHead className="text-right">A ingewisseld</TableHead>
-                      <TableHead className="text-right">B gewonnen</TableHead>
-                      <TableHead className="text-right">B ingewisseld</TableHead>
-                      <TableHead className="text-right">Verschil</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {compareWinkels.map((w) => (
-                      <TableRow key={w.winkel}>
-                        <TableCell className="font-medium">{w.winkel}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w[`${campaignA.name} gewonnen`]}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w[`${campaignA.name} ingewisseld`]}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w[`${campaignB.name} gewonnen`]}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w[`${campaignB.name} ingewisseld`]}</TableCell>
-                        <TableCell className="text-right tabular-nums">{w.verschil}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 /* ─────────────────────── WINKELIER VIEW ─────────────────────── */
 
-function WinkelierView({
-  campaignA,
-  campaignB,
-  isCompareMode,
-}: {
-  campaignA: Campaign;
-  campaignB: Campaign;
-  isCompareMode: boolean;
-}) {
-  const winkels = useMemo(
-    () => uniqueSorted([...campaignA.rows.map((r) => r.winkel_inwissel), ...campaignB.rows.map((r) => r.winkel_inwissel)]),
-    [campaignA.rows, campaignB.rows],
-  );
+function WinkelierView() {
+  const [campaignId, setCampaignId] = useState(campaigns[0].id);
+  const selectedCampaign =
+    campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
+  const data = selectedCampaign.rows;
 
-  const [winkel, setWinkel] = useState<string>(winkels[0] ?? "");
+  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_inwissel)), [data]);
+  const [winkel, setWinkel] = useState<string>("");
 
-  const rows = useMemo(
-    () => campaignA.rows.filter((r) => r.winkel_inwissel === winkel),
-    [campaignA.rows, winkel],
-  );
+  useEffect(() => {
+    if (!winkels.length) {
+      setWinkel("");
+      return;
+    }
 
-  const rowsB = useMemo(
-    () => campaignB.rows.filter((r) => r.winkel_inwissel === winkel),
-    [campaignB.rows, winkel],
-  );
+    if (!winkels.includes(winkel)) {
+      setWinkel(winkels[0]);
+    }
+  }, [winkel, winkels]);
 
-  const stats = getStats(rows, campaignA.totalCouponsIssued);
-  const statsB = getStats(rowsB, campaignB.totalCouponsIssued);
+  const rows = useMemo(() => data.filter((r) => r.winkel_inwissel === winkel), [data, winkel]);
+  const won = rows.filter(isWon).length;
+  const redeemed = rows.filter(isRedeemed).length;
+  const claimed = rows.filter(isClaimed).length;
+  const rate = pct(redeemed, won);
 
   const perf = useMemo(() => {
     const m = new Map<string, { key: string; type: string; waarde: string; gewonnen: number; ingewisseld: number }>();
+
     for (const r of rows) {
       if (!r.coupon_type || !r.coupon_waarde) continue;
       const key = `${r.coupon_type} — ${r.coupon_waarde}`;
@@ -731,36 +640,51 @@ function WinkelierView({
       if (isRedeemed(r)) e.ingewisseld += 1;
       m.set(key, e);
     }
+
     return Array.from(m.values()).sort((a, b) => b.gewonnen - a.gewonnen);
   }, [rows]);
 
-  const trend = useMemo(() => getRedeemTrend(rows.filter(isWon)), [rows]);
-  const trendB = useMemo(() => getRedeemTrend(rowsB.filter(isWon)), [rowsB]);
-  const compareTrend = useMemo(
-    () => mergeTrends(trend, trendB, campaignA.name, campaignB.name),
-    [trend, trendB, campaignA.name, campaignB.name],
-  );
+  const trend = useMemo(() => {
+    const byWeek = new Map<string, number>();
+
+    for (const r of rows.filter(isRedeemed)) {
+      const d = r["Datum opgehaald"];
+      if (!d) continue;
+
+      const key = getWeekStart(d);
+      byWeek.set(key, (byWeek.get(key) || 0) + 1);
+    }
+
+    return Array.from(byWeek.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([week, value]) => ({ week, ingewisseld: value }));
+  }, [rows]);
 
   const insights = useMemo(() => {
     const list: string[] = [];
+
     if (perf.length) {
       const best = [...perf].sort((a, b) => pct(b.ingewisseld, b.gewonnen) - pct(a.ingewisseld, a.gewonnen))[0];
       list.push(`Beste prijs: ${best.key} — conversie ${fmtPct(pct(best.ingewisseld, best.gewonnen))}`);
     }
+
     const ageMap = new Map<string, number>();
     rows.filter(isRedeemed).forEach((r) => ageMap.set(r.leeftijdsgroep, (ageMap.get(r.leeftijdsgroep) || 0) + 1));
     const topAge = Array.from(ageMap.entries()).sort((a, b) => b[1] - a[1])[0];
     if (topAge) list.push(`Sterkste leeftijdsgroep: ${topAge[0]} (${topAge[1]} inwisselingen)`);
+
     const dayMap = new Map<string, number>();
     rows.filter(isRedeemed).forEach((r) => {
       if (r["Datum opgehaald"]) dayMap.set(r["Datum opgehaald"], (dayMap.get(r["Datum opgehaald"]) || 0) + 1);
     });
     const peak = Array.from(dayMap.entries()).sort((a, b) => b[1] - a[1])[0];
     if (peak) list.push(`Piekdag: ${peak[0]} (${peak[1]} inwisselingen)`);
+
     const chMap = new Map<string, number>();
     rows.filter(isWon).forEach((r) => chMap.set(r.kanaal || "Onbekend", (chMap.get(r.kanaal || "Onbekend") || 0) + 1));
     const topCh = Array.from(chMap.entries()).sort((a, b) => b[1] - a[1])[0];
     if (topCh) list.push(`Beste kanaal: ${topCh[0]} (${topCh[1]} winnaars)`);
+
     return list;
   }, [rows, perf]);
 
@@ -768,15 +692,22 @@ function WinkelierView({
     <div className="theme-symfonie space-y-6">
       <Card>
         <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end md:justify-between">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Kies winkel</Label>
-            <Select value={winkel} onValueChange={setWinkel}>
-              <SelectTrigger className="w-72"><SelectValue /></SelectTrigger>
-              <SelectContent className="max-h-72">
-                {winkels.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
+            <CampaignSelect campaignId={campaignId} setCampaignId={setCampaignId} />
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Kies winkel</Label>
+              <Select value={winkel} onValueChange={setWinkel} disabled={!winkels.length}>
+                <SelectTrigger className="w-full md:w-72">
+                  <SelectValue placeholder="Selecteer winkel" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {winkels.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+
           <Button
             variant="outline"
             onClick={() =>
@@ -788,7 +719,7 @@ function WinkelierView({
                   ingewisseld: p.ingewisseld,
                   conversie_pct: pct(p.ingewisseld, p.gewonnen).toFixed(1),
                 })),
-                `${winkel}-prijs-performance.csv`,
+                `${winkel || "winkel"}-prijs-performance.csv`,
               )
             }
           >
@@ -797,65 +728,41 @@ function WinkelierView({
         </CardContent>
       </Card>
 
-      {!isCompareMode ? (
-        <>
-          <div className="grid gap-4 md:grid-cols-4">
-            <Kpi label="Gewonnen" value={stats.won} tone="primary" />
-            <Kpi label="Claimed" value={stats.claimed} />
-            <Kpi label="Ingewisseld" value={stats.redeemed} tone="accent" />
-            <Kpi label="Redeem rate" value={fmtPct(stats.redeemRate)} tone="success" />
+      <div className="grid gap-4 md:grid-cols-4">
+        <Kpi label="Gewonnen" value={won} tone="primary" />
+        <Kpi label="Claimed" value={claimed} />
+        <Kpi label="Ingewisseld" value={redeemed} tone="accent" />
+        <Kpi label="Redeem rate" value={fmtPct(rate)} tone="success" />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Inwisselingen over tijd" info="Per week, op 'Datum opgehaald'.">
+          <div className="h-72">
+            <ResponsiveContainer>
+              <LineChart data={trend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <RTooltip />
+                <Line type="monotone" dataKey="ingewisseld" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
+        </ChartCard>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <ChartCard title="Inwisselingen over tijd" info="Per week, op 'Datum opgehaald'.">
-              <div className="h-72">
-                <ResponsiveContainer>
-                  <LineChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <RTooltip />
-                    <Line type="monotone" dataKey="ingewisseld" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </ChartCard>
-
-            <ChartCard title="Top inzichten" info="Automatisch gegenereerd uit de data.">
-              <ul className="space-y-2 text-sm">
-                {insights.length === 0 && (
-                  <li className="text-muted-foreground">Geen data beschikbaar.</li>
-                )}
-                {insights.map((i, idx) => (
-                  <li key={idx} className="rounded-md border bg-secondary/50 p-3">
-                    {i}
-                  </li>
-                ))}
-              </ul>
-            </ChartCard>
-          </div>
-        </>
-      ) : (
-        <>
-          <CompareKpiTable campaignA={campaignA} campaignB={campaignB} statsA={stats} statsB={statsB} />
-
-          <ChartCard title={`Inwisselingen over tijd — ${winkel}`} info="Zelfde winkel vergeleken tussen beide campagnes.">
-            <div className="h-72">
-              <ResponsiveContainer>
-                <LineChart data={compareTrend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <RTooltip />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey={campaignA.name} stroke="#0B0989" strokeWidth={2.5} dot={false} />
-                  <Line type="monotone" dataKey={campaignB.name} stroke="#00E5AC" strokeWidth={2.5} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-        </>
-      )}
+        <ChartCard title="Top inzichten" info="Automatisch gegenereerd uit de data.">
+          <ul className="space-y-2 text-sm">
+            {insights.length === 0 && (
+              <li className="text-muted-foreground">Geen data beschikbaar.</li>
+            )}
+            {insights.map((i, idx) => (
+              <li key={idx} className="rounded-md border bg-secondary/50 p-3">
+                {i}
+              </li>
+            ))}
+          </ul>
+        </ChartCard>
+      </div>
 
       <Card>
         <CardHeader><CardTitle className="text-base">Prijs performance</CardTitle></CardHeader>
@@ -893,87 +800,205 @@ function WinkelierView({
   );
 }
 
-/* ─────────────────────────── FLOW VIEW ─────────────────────────── */
+/* ─────────────────────────── PERFORMANCE VIEW ─────────────────────────── */
+function PerformanceView() {
+  const [isCompareMode, setIsCompareMode] = useState(false);
+  const [campaignId, setCampaignId] = useState(campaigns[0].id);
+  const [compareCampaignId, setCompareCampaignId] = useState(
+    campaigns[1]?.id ?? campaigns[0].id
+  );
 
-function FlowView({
-  campaignA,
-  campaignB,
-  isCompareMode,
-}: {
-  campaignA: Campaign;
-  campaignB: Campaign;
-  isCompareMode: boolean;
-}) {
-  const stats = getStats(campaignA.rows, campaignA.totalCouponsIssued);
-  const statsB = getStats(campaignB.rows, campaignB.totalCouponsIssued);
+  const trafficRows = useMemo(
+    () => getTrafficForCampaign(campaignId),
+    [campaignId]
+  );
 
-  const wonRows = campaignA.rows.filter(isWon);
-  const uitgeverFilled = wonRows.filter((r) => r.winkel_uitgever).length;
-  const reliable = uitgeverFilled / Math.max(wonRows.length, 1) > 0.9;
+  const compareTrafficRows = useMemo(
+    () => getTrafficForCampaign(compareCampaignId),
+    [compareCampaignId]
+  );
 
-  const funnelData = [
-    { stap: "Won", [campaignA.name]: stats.won, [campaignB.name]: statsB.won },
-    { stap: "Claimed", [campaignA.name]: stats.claimed, [campaignB.name]: statsB.claimed },
-    { stap: "Redeemed", [campaignA.name]: stats.redeemed, [campaignB.name]: statsB.redeemed },
-  ];
+  const compareFunnelSteps = useMemo(() => {
+    const a = getFunnelSteps(trafficRows);
+    const b = getFunnelSteps(compareTrafficRows);
+
+    return a.map((step, index) => ({
+      label: step.label,
+      campagneA: step.value,
+      campagneB: b[index]?.value ?? 0,
+      verschil: (b[index]?.value ?? 0) - step.value,
+    }));
+  }, [trafficRows, compareTrafficRows]);
+
+  const compareDropOffData = useMemo(() => {
+    const a = getDropOffData(trafficRows);
+    const b = getDropOffData(compareTrafficRows);
+
+    return a.map((step, index) => {
+      const bStep = b[index];
+
+      return {
+        step: step.step,
+        campagneA: step.dropOffRate,
+        campagneB: bStep?.dropOffRate ?? 0,
+        verschil: (bStep?.dropOffRate ?? 0) - step.dropOffRate,
+      };
+    });
+  }, [trafficRows, compareTrafficRows]);
+
+  const selectedCampaign =
+    campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
+
+  const compareCampaign =
+    campaigns.find((campaign) => campaign.id === compareCampaignId) ??
+    campaigns[1] ??
+    campaigns[0];
+
+  const totalTraffic = useMemo(() => sumTraffic(trafficRows), [trafficRows]);
+  const funnelSteps = useMemo(() => getFunnelSteps(trafficRows), [trafficRows]);
+  const dropOffData = useMemo(() => getDropOffData(trafficRows), [trafficRows]);
+  const channelPerformance = useMemo(
+    () => getChannelPerformance(trafficRows),
+    [trafficRows]
+  );
 
   return (
     <div className="space-y-6">
-      {!isCompareMode ? (
-        <ChartCard title="Funnel: Won → Claimed → Redeemed" info="Aantallen per status.">
-          <div className="grid gap-4 md:grid-cols-3">
-            {[
-              { label: "Won", v: stats.won, color: "#0B0989" },
-              { label: "Claimed", v: stats.claimed, color: "#1E1E1E" },
-              { label: "Redeemed", v: stats.redeemed, color: "#00E5AC" },
-            ].map((s, i, arr) => {
-              const prev = i === 0 ? s.v : arr[i - 1].v;
-              return (
-                <Card key={s.label} className="relative overflow-hidden">
-                  <div className="absolute inset-0 opacity-10" style={{ background: s.color }} />
-                  <CardContent className="relative p-6">
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground">{s.label}</div>
-                    <div className="mt-2 text-4xl font-semibold tabular-nums">{s.v.toLocaleString("nl-NL")}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {i === 0 ? "Startpunt" : `${fmtPct(pct(s.v, prev))} t.o.v. vorige stap`}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </ChartCard>
-      ) : (
-        <>
-          <CompareKpiTable campaignA={campaignA} campaignB={campaignB} statsA={stats} statsB={statsB} />
+      <Card>
+        <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end md:justify-between">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
+            <CampaignSelect
+              campaignId={campaignId}
+              setCampaignId={(id) => {
+                setCampaignId(id);
+              }}
+              label={isCompareMode ? "Campagne A" : "Campagne"}
+            />
 
-          <ChartCard title="Funnel vergelijking" info="Won, claimed en redeemed naast elkaar per campagne.">
-            <div className="h-80">
-              <ResponsiveContainer>
-                <BarChart data={funnelData}>
+            {isCompareMode && (
+              <CampaignSelect
+                campaignId={compareCampaignId}
+                setCampaignId={setCompareCampaignId}
+                label="Campagne B"
+              />
+            )}
+
+            <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
+              <input
+                type="checkbox"
+                checked={isCompareMode}
+                onChange={(e) => setIsCompareMode(e.target.checked)}
+              />
+              Vergelijk campagnes
+            </label>
+          </div>
+
+          <div className="text-sm text-muted-foreground">
+            Winkelcentrum:{" "}
+            <span className="font-medium text-foreground">
+              {centrumNieuwVennep.name}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <Kpi label="Kliks / QR scans" value={totalTraffic.clicks.toLocaleString("nl-NL")} tone="primary" />
+        <Kpi label="Landingspagina" value={totalTraffic.landingPageVisits.toLocaleString("nl-NL")} tone="primary" />
+        <Kpi label="Formulier afgerond" value={totalTraffic.formSubmits.toLocaleString("nl-NL")} tone="accent" />
+        <Kpi label="Landing conversie" value={fmtPct(pct(totalTraffic.formSubmits, totalTraffic.landingPageVisits))} tone="success" />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Performance funnel" info="Van klik/QR-scan naar opgehaalde prijs.">
+          <div className="h-80">
+            <ResponsiveContainer>
+              {isCompareMode ? (
+                <BarChart data={compareFunnelSteps} layout="vertical" margin={{ left: 100 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="stap" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <XAxis type="number" tick={{ fontSize: 11 }} />
+                  <YAxis dataKey="label" type="category" tick={{ fontSize: 11 }} width={170} />
                   <RTooltip />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey={campaignA.name} fill="#0B0989" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey={campaignB.name} fill="#00E5AC" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="campagneA" name={selectedCampaign.name} fill="#0B0989" radius={[0, 6, 6, 0]} />
+                  <Bar dataKey="campagneB" name={compareCampaign.name} fill="#00E5AC" radius={[0, 6, 6, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-        </>
-      )}
-
-      <ChartCard title="Cross-store: uitgever → inwisselaar" info="Toont alleen bij voldoende databetrouwbaarheid.">
-        {reliable ? (
-          <div className="text-sm">Cross-store data is voldoende compleet — visualisatie volgt in v2.</div>
-        ) : (
-          <div className="rounded-md border border-dashed bg-muted/40 p-6 text-center text-sm text-muted-foreground">
-            Niet meetbaar met huidige data — <span className="font-medium">winkel_uitgever</span> is{" "}
-            {fmtPct(pct(uitgeverFilled, wonRows.length))} gevuld voor gewonnen coupons.
+              ) : (
+                <BarChart data={funnelSteps} layout="vertical" margin={{ left: 100 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis type="number" tick={{ fontSize: 11 }} />
+                  <YAxis dataKey="label" type="category" tick={{ fontSize: 11 }} width={170} />
+                  <RTooltip />
+                  <Bar dataKey="value" name="Aantal" fill="#0B0989" radius={[0, 6, 6, 0]} />
+                </BarChart>
+              )}
+            </ResponsiveContainer>
           </div>
-        )}
+        </ChartCard>
+
+        <ChartCard title="Afhaakmomenten" info="Laat zien hoeveel consumenten per stap afhaken.">
+          <div className="h-80">
+            <ResponsiveContainer>
+              {isCompareMode ? (
+                <BarChart data={compareDropOffData} margin={{ left: 0, right: 16, top: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="step" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={90} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                  <RTooltip formatter={(value) => `${Number(value).toFixed(1)}%`} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="campagneA" name={selectedCampaign.name} fill="#0B0989" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="campagneB" name={compareCampaign.name} fill="#00E5AC" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              ) : (
+                <BarChart data={dropOffData} margin={{ left: 0, right: 16, top: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="step" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={90} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <RTooltip formatter={(value, name) => [value, name === "dropOff" ? "Afhakers" : name]} />
+                  <Bar dataKey="dropOff" name="Afhakers" fill="#00E5AC" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              )}
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+      </div>
+
+      <ChartCard title="Kanaal performance" info="Vergelijkt waar consumenten vandaan komen en welk kanaal het beste converteert.">
+        <div className="overflow-auto rounded-md border">
+          <Table>
+            <TableHeader className="bg-muted">
+              <TableRow>
+                <TableHead>Kanaal</TableHead>
+                <TableHead className="text-right">Kliks/scans</TableHead>
+                <TableHead className="text-right">Landing</TableHead>
+                <TableHead className="text-right">Formulier start</TableHead>
+                <TableHead className="text-right">Formulier afgerond</TableHead>
+                <TableHead className="text-right">Prijs gewonnen</TableHead>
+                <TableHead className="text-right">Prijs opgehaald</TableHead>
+                <TableHead className="text-right">Landing conv.</TableHead>
+                <TableHead className="text-right">Formulier conv.</TableHead>
+                <TableHead className="text-right">Redeem rate</TableHead>
+              </TableRow>
+            </TableHeader>
+
+            <TableBody>
+              {channelPerformance.map((row) => (
+                <TableRow key={row.source}>
+                  <TableCell className="font-medium">{row.source}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.clicks}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.landingPageVisits}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.formStarts}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.formSubmits}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.couponWins}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.redeemed}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtPct(row.landingRate)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtPct(row.formSubmitRate)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtPct(row.redeemRate)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </ChartCard>
     </div>
   );
@@ -981,16 +1006,10 @@ function FlowView({
 
 /* ───────────────────────────── ROOT ───────────────────────────── */
 
-type Tab = "obm" | "winkelier" | "flow";
+type Tab = "centrum" | "winkelier" | "performance";
 
 export default function Index() {
-  const [tab, setTab] = useState<Tab>("obm");
-  const [isCompareMode, setIsCompareMode] = useState(false);
-  const [campaignAId, setCampaignAId] = useState(campaigns[0].id);
-  const [campaignBId, setCampaignBId] = useState(campaigns[1]?.id ?? campaigns[0].id);
-
-  const campaignA = campaigns.find((c) => c.id === campaignAId) ?? campaigns[0];
-  const campaignB = campaigns.find((c) => c.id === campaignBId) ?? campaigns[1] ?? campaigns[0];
+  const [tab, setTab] = useState<Tab>("centrum");
 
   return (
     <div className="min-h-screen bg-background">
@@ -999,16 +1018,14 @@ export default function Index() {
           <div>
             <h1 className="text-xl font-semibold">Coupon Campagne Dashboard</h1>
             <p className="text-sm text-muted-foreground">
-              {isCompareMode
-                ? `${campaignA.name} vergelijken met ${campaignB.name}`
-                : campaignA.name}
+              {centrumNieuwVennep.name} · OBM &amp; StoreTime
             </p>
           </div>
           <nav className="flex gap-1 rounded-lg bg-muted p-1">
             {([
-              ["obm", "OBM Overzicht"],
+              ["centrum", "Centrum Overzicht"],
               ["winkelier", "Winkelier"],
-              ["flow", "Flow"],
+              ["performance", "Performance"],
             ] as [Tab, string][]).map(([k, label]) => (
               <button
                 key={k}
@@ -1024,19 +1041,10 @@ export default function Index() {
         </div>
       </header>
 
-      <main className="container space-y-6 py-6">
-        <CampaignControls
-          isCompareMode={isCompareMode}
-          setIsCompareMode={setIsCompareMode}
-          campaignAId={campaignAId}
-          setCampaignAId={setCampaignAId}
-          campaignBId={campaignBId}
-          setCampaignBId={setCampaignBId}
-        />
-
-        {tab === "obm" && <ObmView campaignA={campaignA} campaignB={campaignB} isCompareMode={isCompareMode} />}
-        {tab === "winkelier" && <WinkelierView campaignA={campaignA} campaignB={campaignB} isCompareMode={isCompareMode} />}
-        {tab === "flow" && <FlowView campaignA={campaignA} campaignB={campaignB} isCompareMode={isCompareMode} />}
+      <main className="container py-6">
+        {tab === "centrum" && <CentrumView />}
+        {tab === "winkelier" && <WinkelierView />}
+        {tab === "performance" && <PerformanceView />}
       </main>
 
       <footer className="container py-8 text-xs text-muted-foreground">
@@ -1044,12 +1052,14 @@ export default function Index() {
           <summary className="cursor-pointer font-medium text-foreground">Over dit dashboard / definities</summary>
           <div className="mt-3 space-y-2">
             <p><strong>Bron:</strong> Excel dataset (1 rij = 1 coupon-actie/registratie), ingelezen als JSON.</p>
-            <p><strong>Coupons gewonnen:</strong> Prijsgewonnen = TRUE, óf status ∈ {"{won, claimed, redeemed}"}.</p>
-            <p><strong>Coupons claimed:</strong> status ∈ {"{claimed, redeemed}"}.</p>
+            <p><strong>Totaal winkels:</strong> aantal winkels binnen het gekoppelde winkelcentrum.</p>
+            <p><strong>Deelnemende winkels:</strong> aantal winkels dat gekoppeld is aan de geselecteerde campagne.</p>
+            <p><strong>Segmentoverzicht:</strong> verdeling van deelnemende winkels op basis van winkelsegment.</p>
+            <p><strong>Coupons gewonnen:</strong> Prijsgewonnen = TRUE, óf status ∈ {"{won, redeemed}"}.</p>
             <p><strong>Coupons ingewisseld:</strong> status = redeemed.</p>
             <p><strong>Redeem rate:</strong> ingewisseld ÷ gewonnen.</p>
             <p><strong>Time-to-redeem:</strong> Datum opgehaald − Datum uitgeleverd (alleen indien beide gevuld).</p>
-            <p><strong>Niet (volledig) meetbaar:</strong> Cross-store flow (winkel_uitgever → winkel_inwissel) wordt alleen getoond als de uitgeverskolom voldoende compleet is.</p>
+            <p><strong>Niet volledig meetbaar:</strong> Cross-store flow (winkel_uitgever → winkel_inwissel) wordt alleen getoond als de uitgeverskolom voldoende compleet is.</p>
           </div>
         </details>
       </footer>
