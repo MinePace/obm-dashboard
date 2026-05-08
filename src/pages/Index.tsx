@@ -353,10 +353,13 @@ function CentrumView() {
     });
   }, [filtered]);
 
-  const genders = useMemo(
-    () => uniqueSorted(filtered.filter(isWon).map((r) => r["Wat is uw geslacht"])),
-    [filtered],
-  );
+  const genders = useMemo(() => {
+    const preferredOrder = ["Man", "Vrouw", "Onbekend"];
+
+    return preferredOrder.filter((gender) =>
+      filtered.some((r) => isWon(r) && r["Wat is uw geslacht"] === gender)
+    );
+  }, [filtered]);
 
   return (
     <div className="space-y-6">
@@ -421,13 +424,13 @@ function CentrumView() {
           tone="primary"
         />
         <Kpi
-          label="Coupons gewonnen"
+          label="Prijs gewonnen"
           value={won.toLocaleString("nl-NL")}
           hint="Prijsgewonnen of status won/claimed/redeemed"
           tone="primary"
         />
         <Kpi
-          label="Coupons ingewisseld"
+          label="Prijs opgehaald"
           value={redeemed.toLocaleString("nl-NL")}
           hint="status = redeemed"
           tone="accent"
