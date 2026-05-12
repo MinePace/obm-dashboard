@@ -34,6 +34,9 @@ import {
   Tooltip as RTooltip,
   XAxis,
   YAxis,
+  Pie,
+  PieChart,
+  Cell,
 } from "recharts";
 import { Download, Info } from "lucide-react";
 import {
@@ -70,10 +73,18 @@ const CHART_COLORS = [
   "hsl(var(--chart-5))",
 ];
 
-function getWeekStart(date: string) {
-  const dt = new Date(date);
+function getWeekStart(date: string | null | undefined) {
+  if (!date) return null;
+
+  const cleaned = String(date).trim();
+  if (!cleaned) return null;
+
+  const dt = new Date(cleaned);
+  if (Number.isNaN(dt.getTime())) return null;
+
   const day = dt.getUTCDay() || 7;
   dt.setUTCDate(dt.getUTCDate() - (day - 1));
+
   return dt.toISOString().slice(0, 10);
 }
 
@@ -288,7 +299,7 @@ function CentrumView() {
 
   const options = useMemo(
     () => ({
-      winkels: uniqueSorted(data.map((r) => r.winkel_inwissel)),
+      winkels: uniqueSorted(data.map((r) => r.winkel_inwissel || r.winkel_uitgever)),
       coupon_types: uniqueSorted(data.map((r) => r.coupon_type)),
       leeftijden: uniqueSorted(data.map((r) => r.leeftijdsgroep)),
       kanalen: uniqueSorted(data.map((r) => r.kanaal)),
@@ -310,10 +321,12 @@ function CentrumView() {
     const byWeek = new Map<string, number>();
 
     for (const r of filtered) {
-      const d = r["Datum uitgeleverd"];
+      const d = r["datum_uitgeleverd"];
       if (!d) continue;
 
       const key = getWeekStart(d);
+      if (!key) continue;
+
       byWeek.set(key, (byWeek.get(key) || 0) + 1);
     }
 
@@ -326,7 +339,7 @@ function CentrumView() {
     const m = new Map<string, { winkel: string; gewonnen: number; ingewisseld: number }>();
 
     for (const r of filtered) {
-      const w = r.winkel_inwissel;
+      const w = r.winkel_inwissel || r.winkel_uitgever;
       if (!w) continue;
 
       const e = m.get(w) || { winkel: w, gewonnen: 0, ingewisseld: 0 };
@@ -340,13 +353,13 @@ function CentrumView() {
 
   const ageGender = useMemo(() => {
     const ages = uniqueSorted(filtered.filter(isWon).map((r) => r.leeftijdsgroep));
-    const genders = uniqueSorted(filtered.filter(isWon).map((r) => r["Wat is uw geslacht"]));
+    const genders = uniqueSorted(filtered.filter(isWon).map((r) => r["wat_is_uw_geslacht"]));
 
     return ages.map((a) => {
       const row: Record<string, string | number> = { leeftijd: a };
       for (const g of genders) {
         row[g] = filtered.filter(
-          (r) => isWon(r) && r.leeftijdsgroep === a && r["Wat is uw geslacht"] === g,
+          (r) => isWon(r) && r.leeftijdsgroep === a && r["wat_is_uw_geslacht"] === g,
         ).length;
       }
       return row;
@@ -357,15 +370,32 @@ function CentrumView() {
     const preferredOrder = ["Man", "Vrouw", "Onbekend"];
 
     return preferredOrder.filter((gender) =>
-      filtered.some((r) => isWon(r) && r["Wat is uw geslacht"] === gender)
+      filtered.some((r) => isWon(r) && r["wat_is_uw_geslacht"] === gender)
     );
   }, [filtered]);
+
+  const genderPieData = useMemo(() => {
+    if (!filters.leeftijdsgroep) return [];
+
+    return genders
+      .map((gender) => ({
+        name: gender,
+        value: filtered.filter(
+          (r) =>
+            isWon(r) &&
+            r.leeftijdsgroep === filters.leeftijdsgroep &&
+            r.wat_is_uw_geslacht === gender
+        ).length,
+      }))
+      .filter((item) => item.value > 0);
+  }, [filtered, filters.leeftijdsgroep, genders]);
 
   return (
     <div className="space-y-6">
       <Card>
         <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end md:justify-between">
           <div className="flex flex-col gap-4 md:flex-row md:items-end">
+
             <CampaignSelect
               campaignId={campaignId}
               setCampaignId={(id) => {
@@ -382,15 +412,6 @@ function CentrumView() {
                 label="Campagne B"
               />
             )}
-
-            <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
-              <input
-                type="checkbox"
-                checked={isCompareMode}
-                onChange={(e) => setIsCompareMode(e.target.checked)}
-              />
-              Vergelijk campagnes
-            </label>
           </div>
 
           <div className="text-sm text-muted-foreground">
@@ -402,9 +423,27 @@ function CentrumView() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">Vergelijken</h2>
+
+              <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={isCompareMode}
+                  onChange={(e) => setIsCompareMode(e.target.checked)}
+                />
+                Vergelijk campagnes
+              </label>
+          </div>
+        </CardContent>
+      </Card>
+
+
       <FilterBar filters={filters} setFilters={setFilters} options={options} />
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-8">
         <Kpi
           label="Totaal winkels"
           value={centrumNieuwVennep.totalStores.toLocaleString("nl-NL")}
@@ -418,15 +457,27 @@ function CentrumView() {
           tone="accent"
         />
         <Kpi
+          label="Totaal prijzen"
+          value="4976"
+          hint="Totaal aantal prijzen binnen de lopende campagne"
+          tone="accent"
+        />
+        <Kpi
           label="Coupons uitgegeven"
           value={selectedCampaign.totalCouponsIssued.toLocaleString("nl-NL")}
           hint="Totaal aantal uitgegeven coupons"
           tone="primary"
         />
         <Kpi
+          label="Coupons ingewisseld"
+          value={claimed.toLocaleString("nl-NL")}
+          hint="Totaal gebruikte coupons"
+          tone="primary"
+        />
+        <Kpi
           label="Prijs gewonnen"
           value={won.toLocaleString("nl-NL")}
-          hint="Prijsgewonnen of status won/claimed/redeemed"
+          hint="prijs_gewonnen of status claimed/redeemed"
           tone="primary"
         />
         <Kpi
@@ -438,7 +489,7 @@ function CentrumView() {
         <Kpi
           label="Redeem rate"
           value={fmtPct(redeemRate)}
-          hint="ingewisseld ÷ gewonnen"
+          hint="opgehaald ÷ gewonnen"
           tone="success"
         />
       </div>
@@ -490,7 +541,7 @@ function CentrumView() {
     )}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <ChartCard title="Aanmeldingen per week" info="Op basis van 'Datum uitgeleverd'.">
+        <ChartCard title="Aanmeldingen per week" info="Op basis van 'datum_uitgeleverd'.">
           <div className="h-72">
             <ResponsiveContainer>
               <LineChart data={trend} margin={{ left: 0, right: 16, top: 8 }}>
@@ -518,19 +569,52 @@ function CentrumView() {
           </div>
         </ChartCard>
 
-        <ChartCard title="Deelname per leeftijd × gender" info="Gewonnen coupons.">
+        <ChartCard
+          title={
+            filters.leeftijdsgroep
+              ? `Genderverdeling binnen ${filters.leeftijdsgroep}`
+              : "Deelname per leeftijd × gender"
+          }
+          info="Gewonnen coupons."
+        >
           <div className="h-72">
             <ResponsiveContainer>
-              <BarChart data={ageGender}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="leeftijd" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <RTooltip />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                {genders.map((g, i) => (
-                  <Bar key={g} dataKey={g} stackId="a" fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </BarChart>
+              {filters.leeftijdsgroep ? (
+                <PieChart>
+                  <Pie
+                    data={genderPieData}
+                    dataKey="value"
+                    nameKey="name"
+                    outerRadius={90}
+                    label={({ name, value }) => `${name}: ${value}`}
+                  >
+                    {genderPieData.map((entry, i) => (
+                      <Cell
+                        key={entry.name}
+                        fill={CHART_COLORS[i % CHART_COLORS.length]}
+                      />
+                    ))}
+                  </Pie>
+                  <RTooltip />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                </PieChart>
+              ) : (
+                <BarChart data={ageGender}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="leeftijd" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <RTooltip />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {genders.map((g, i) => (
+                    <Bar
+                      key={g}
+                      dataKey={g}
+                      stackId="a"
+                      fill={CHART_COLORS[i % CHART_COLORS.length]}
+                    />
+                  ))}
+                </BarChart>
+              )}
             </ResponsiveContainer>
           </div>
         </ChartCard>
@@ -612,7 +696,7 @@ function WinkelierView() {
     campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
   const data = selectedCampaign.rows;
 
-  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_inwissel)), [data]);
+  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_uitgever)), [data]);
   const [winkel, setWinkel] = useState<string>("");
 
   useEffect(() => {
@@ -626,7 +710,7 @@ function WinkelierView() {
     }
   }, [winkel, winkels]);
 
-  const rows = useMemo(() => data.filter((r) => r.winkel_inwissel === winkel), [data, winkel]);
+  const rows = useMemo(() => data.filter((r) => r.winkel_uitgever === winkel), [data, winkel]);
   const won = rows.filter(isWon).length;
   const redeemed = rows.filter(isRedeemed).length;
   const claimed = rows.filter(isClaimed).length;
@@ -636,11 +720,22 @@ function WinkelierView() {
     const m = new Map<string, { key: string; type: string; waarde: string; gewonnen: number; ingewisseld: number }>();
 
     for (const r of rows) {
-      if (!r.coupon_type || !r.coupon_waarde) continue;
-      const key = `${r.coupon_type} — ${r.coupon_waarde}`;
-      const e = m.get(key) || { key, type: r.coupon_type, waarde: r.coupon_waarde, gewonnen: 0, ingewisseld: 0 };
+      if (!r.coupon_type) continue;
+
+      const waarde = r.coupon_waarde || "-";
+      const key = `${r.coupon_type} — ${waarde}`;
+
+      const e = m.get(key) || {
+        key,
+        type: r.coupon_type,
+        waarde,
+        gewonnen: 0,
+        ingewisseld: 0,
+      };
+
       if (isWon(r)) e.gewonnen += 1;
       if (isRedeemed(r)) e.ingewisseld += 1;
+
       m.set(key, e);
     }
 
@@ -651,10 +746,12 @@ function WinkelierView() {
     const byWeek = new Map<string, number>();
 
     for (const r of rows.filter(isRedeemed)) {
-      const d = r["Datum opgehaald"];
+      const d = r["datum_opgehaald"];
       if (!d) continue;
 
       const key = getWeekStart(d);
+      if (!key) continue;
+
       byWeek.set(key, (byWeek.get(key) || 0) + 1);
     }
 
@@ -678,7 +775,7 @@ function WinkelierView() {
 
     const dayMap = new Map<string, number>();
     rows.filter(isRedeemed).forEach((r) => {
-      if (r["Datum opgehaald"]) dayMap.set(r["Datum opgehaald"], (dayMap.get(r["Datum opgehaald"]) || 0) + 1);
+      if (r["datum_opgehaald"]) dayMap.set(r["datum_opgehaald"], (dayMap.get(r["datum_opgehaald"]) || 0) + 1);
     });
     const peak = Array.from(dayMap.entries()).sort((a, b) => b[1] - a[1])[0];
     if (peak) list.push(`Piekdag: ${peak[0]} (${peak[1]} inwisselingen)`);
@@ -731,9 +828,8 @@ function WinkelierView() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <Kpi label="Gewonnen" value={won} tone="primary" />
-        <Kpi label="Claimed" value={claimed} />
         <Kpi label="Ingewisseld" value={redeemed} tone="accent" />
         <Kpi label="Redeem rate" value={fmtPct(rate)} tone="success" />
       </div>
@@ -909,7 +1005,7 @@ function PerformanceView() {
         <Kpi label="Kliks / QR scans" value={totalTraffic.clicks.toLocaleString("nl-NL")} tone="primary" />
         <Kpi label="Landingspagina" value={totalTraffic.landingPageVisits.toLocaleString("nl-NL")} tone="primary" />
         <Kpi label="Formulier afgerond" value={totalTraffic.formSubmits.toLocaleString("nl-NL")} tone="accent" />
-        <Kpi label="Landing conversie" value={fmtPct(pct(totalTraffic.formSubmits, totalTraffic.landingPageVisits))} tone="success" />
+        <Kpi label="Landing conversie" value={fmtPct(pct(totalTraffic.formSubmits, totalTraffic.landingPageVisits))} tone="accent" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -1058,10 +1154,10 @@ export default function Index() {
             <p><strong>Totaal winkels:</strong> aantal winkels binnen het gekoppelde winkelcentrum.</p>
             <p><strong>Deelnemende winkels:</strong> aantal winkels dat gekoppeld is aan de geselecteerde campagne.</p>
             <p><strong>Segmentoverzicht:</strong> verdeling van deelnemende winkels op basis van winkelsegment.</p>
-            <p><strong>Coupons gewonnen:</strong> Prijsgewonnen = TRUE, óf status ∈ {"{won, redeemed}"}.</p>
+            <p><strong>Coupons gewonnen:</strong> prijs_gewonnen = TRUE, óf status ∈ {"{won, redeemed}"}.</p>
             <p><strong>Coupons ingewisseld:</strong> status = redeemed.</p>
             <p><strong>Redeem rate:</strong> ingewisseld ÷ gewonnen.</p>
-            <p><strong>Time-to-redeem:</strong> Datum opgehaald − Datum uitgeleverd (alleen indien beide gevuld).</p>
+            <p><strong>Time-to-redeem:</strong> datum_opgehaald − datum_uitgeleverd (alleen indien beide gevuld).</p>
             <p><strong>Niet volledig meetbaar:</strong> Cross-store flow (winkel_uitgever → winkel_inwissel) wordt alleen getoond als de uitgeverskolom voldoende compleet is.</p>
           </div>
         </details>

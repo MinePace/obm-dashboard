@@ -2,17 +2,24 @@ import winkelWeken from "@/data/campaign-winkel-weken.json";
 import lenteGeluk from "@/data/campaign-lente-geluk.json";
 
 export type Row = {
-  status: "registered" | "won" | "claimed" | "redeemed";
-  Prijsgewonnen: boolean;
+  status: string;
+  prijs_gewonnen: boolean;
+
   coupon_type: string | null;
   coupon_waarde: string | null;
+
   winkel_inwissel: string | null;
   winkel_uitgever: string | null;
+
   leeftijdsgroep: string;
-  "Wat is uw geslacht": string;
+
+  wat_is_uw_leeftijd: string | null;
+  wat_is_uw_geslacht: string | null;
+
   kanaal: string;
-  "Datum uitgeleverd": string | null;
-  "Datum opgehaald": string | null;
+
+  datum_uitgeleverd: string | null;
+  datum_opgehaald: string | null;
 };
 
 export type Filters = {
@@ -88,6 +95,12 @@ export const centrumNieuwVennep: ShoppingCenter = {
     { id: "haarstudio-unique", name: "HaarstudioUnique", segment: "Persoonlijke verzorging" },
     { id: "chris-hair", name: "Chris Hair Beauty Nails", segment: "Persoonlijke verzorging" },
     { id: "snoep-kadoboetiek", name: "Snoep & Kadoboetiek", segment: "Overige winkels" },
+    { id: "supermarkt-joud", name: "Supermarkt Joud", segment: "Levensmiddelen" },
+    { id: "krishna", name: "The Krishna Indian Restaurant 🇮🇳", segment: "Lunchroom" },
+    { id: "latelier-reform", name: "L'Atelier Re-Form Pilates Studio", segment: "Persoonlijke verzorging" },
+    { id: "hennys-rits", name: "Henny's Rits", segment: "Overige winkels" },
+    { id: "softsiders", name: "Softsiders Slaapspecialisten", segment: "Wonen en warenhuis" },
+    { id: "copy-partners", name: "Copy Partners", segment: "Overige winkels" },
   ],
 
   campaigns: [
@@ -114,6 +127,12 @@ export const centrumNieuwVennep: ShoppingCenter = {
         "haarstudio-unique",
         "chris-hair",
         "snoep-kadoboetiek",
+        "supermarkt-joud",
+        "krishna",
+        "latelier-reform",
+        "hennys-rits",
+        "softsiders",
+        "copy-partners",
       ],
     },
     {
@@ -176,10 +195,10 @@ export function getStoreSegmentOverview(
 }
 
 export const isWon = (r: Row) =>
-  r.Prijsgewonnen || ["won", "claimed", "redeemed"].includes(r.status);
+  r.prijs_gewonnen || ["claimed", "redeemed"].includes(r.status);
 
 export const isClaimed = (r: Row) =>
-  ["claimed", "redeemed"].includes(r.status);
+  ["registered", "claimed", "redeemed"].includes(r.status);
 
 export const isRedeemed = (r: Row) => r.status === "redeemed";
 
@@ -193,20 +212,49 @@ export function uniqueSorted<T>(arr: (T | null | undefined)[]): T[] {
   ).sort((a, b) => String(a).localeCompare(String(b)));
 }
 
+export function normalizeText(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+export function getRowStoreName(row: Row) {
+  return row.winkel_inwissel || row.winkel_uitgever || null;
+}
+
+export function getStoreByName(
+  center: ShoppingCenter,
+  storeName: string | null | undefined
+) {
+  const normalizedStoreName = normalizeText(storeName);
+
+  if (!normalizedStoreName) return null;
+
+  return (
+    center.stores.find(
+      (store) => normalizeText(store.name) === normalizedStoreName
+    ) ?? null
+  );
+}
+
 export function applyFilters(rows: Row[], f: Filters): Row[] {
   return rows.filter((r) => {
-    const d = r["Datum opgehaald"] || r["Datum uitgeleverd"];
+    const d = r.datum_opgehaald || r.datum_uitgeleverd;
+    const storeName = getRowStoreName(r);
 
     if (f.dateFrom && (!d || d < f.dateFrom)) return false;
     if (f.dateTo && (!d || d > f.dateTo)) return false;
-    if (f.winkel && r.winkel_inwissel !== f.winkel) return false;
+
+    if (f.winkel && normalizeText(storeName) !== normalizeText(f.winkel)) {
+      return false;
+    }
+
     if (f.coupon_type && r.coupon_type !== f.coupon_type) return false;
     if (f.leeftijdsgroep && r.leeftijdsgroep !== f.leeftijdsgroep) return false;
     if (f.kanaal && r.kanaal !== f.kanaal) return false;
+
     if (f.segment) {
-      const store = centrumNieuwVennep.stores.find(
-        (s) => s.name === r.winkel_inwissel
-      );
+      const store = getStoreByName(centrumNieuwVennep, storeName);
 
       if (!store || store.segment !== f.segment) return false;
     }
