@@ -47,7 +47,7 @@ export type StoreSegment =
   | "Lunchroom" 
   | "Restaurant" 
   | "Dienst" 
-  | "Geld,werk, woning";
+  | "Geld, werk, woning";
 
 export type Store = {
   id: string;

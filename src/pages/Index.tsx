@@ -30,13 +30,13 @@ import {
   Legend,
   Line,
   LineChart,
+  Pie,
+  PieChart,
+  Cell,
   ResponsiveContainer,
   Tooltip as RTooltip,
   XAxis,
   YAxis,
-  Pie,
-  PieChart,
-  Cell,
 } from "recharts";
 import { Download, Info } from "lucide-react";
 import {
@@ -61,6 +61,7 @@ import {
   getTrafficForCampaign,
   sumTraffic,
 } from "@/lib/traffic-source";
+import { type CompareItem, buildComparisonData } from "@/lib/comparison";
 import { Kpi } from "@/components/Kpi";
 
 type Campaign = (typeof campaigns)[number];
@@ -259,31 +260,432 @@ function ChartCard({
   );
 }
 
+type DashboardCompareItem = Omit<CompareItem, "filters"> & {
+  filters: Filters;
+};
+
+type CompareMode = "custom" | "periode" | "winkel" | "segment" | "leeftijdsgroep";
+
+type ComparisonDataItem = {
+  id: string;
+  label: string;
+  campaignId: string;
+  filters: Filters;
+  rows: Campaign["rows"];
+  won: number;
+  redeemed: number;
+  redeemRate: number;
+};
+
+const createCompareId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `compare-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const ALL = "__all__";
+
+function getRowDate(row: Campaign["rows"][number]) {
+  const r = row as any;
+  return r.datum_uitgeleverd || r["Datum uitgeleverd"] || null;
+}
+
+function getRowStoreName(row: Campaign["rows"][number]) {
+  const r = row as any;
+  return r.winkel_inwissel || r.winkel_uitgever || null;
+}
+
+function buildTrendFromRows(rows: Campaign["rows"], dataKey = "aanmeldingen") {
+  const byWeek = new Map<string, number>();
+
+  for (const row of rows) {
+    const date = getRowDate(row);
+    if (!date) continue;
+
+    const week = getWeekStart(date);
+    if (!week) continue;
+
+    byWeek.set(week, (byWeek.get(week) || 0) + 1);
+  }
+
+  return Array.from(byWeek.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([week, value]) => ({ week, [dataKey]: value }));
+}
+
+function buildComparisonTrend(items: ComparisonDataItem[]) {
+  const weekMap = new Map<string, Record<string, string | number>>();
+
+  for (const item of items) {
+    for (const row of item.rows) {
+      const date = getRowDate(row);
+      if (!date) continue;
+
+      const week = getWeekStart(date);
+      if (!week) continue;
+
+      const existing = weekMap.get(week) ?? { week };
+      existing[item.label] = Number(existing[item.label] ?? 0) + 1;
+      weekMap.set(week, existing);
+    }
+  }
+
+  return Array.from(weekMap.values()).sort((a, b) =>
+    String(a.week).localeCompare(String(b.week))
+  );
+}
+
+function buildCompareItemLabel(item: DashboardCompareItem) {
+  if (item.label.trim()) return item.label.trim();
+
+  const campaign = campaigns.find((c) => c.id === item.campaignId);
+  if (item.filters.winkel) return item.filters.winkel;
+  if (item.filters.segment) return item.filters.segment;
+  if (item.filters.leeftijdsgroep) return item.filters.leeftijdsgroep;
+  if (item.filters.dateFrom || item.filters.dateTo) {
+    return `${item.filters.dateFrom || "..."} t/m ${item.filters.dateTo || "..."}`;
+  }
+
+  return campaign?.name ?? "Vergelijking";
+}
+
+function createDefaultCompareItem(
+  label: string,
+  campaignId = campaigns[0].id,
+  filters: Filters = {}
+): DashboardCompareItem {
+  return {
+    id: createCompareId(),
+    label,
+    campaignId,
+    filters,
+  };
+}
+
+function sanitizeCompareFilters(filters: Filters, mode: CompareMode): Filters {
+  if (mode === "custom") return filters;
+
+  if (mode === "periode") {
+    return {
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+    };
+  }
+
+  if (mode === "winkel") {
+    return { winkel: filters.winkel };
+  }
+
+  if (mode === "segment") {
+    return { segment: filters.segment };
+  }
+
+  if (mode === "leeftijdsgroep") {
+    return { leeftijdsgroep: filters.leeftijdsgroep };
+  }
+
+  return filters;
+}
+
+function getCompareModeHelp(mode: CompareMode) {
+  if (mode === "periode") return "Vergelijk periodes binnen dezelfde of verschillende campagnes, bijvoorbeeld april tegenover mei.";
+  if (mode === "winkel") return "Vergelijk winkels met elkaar. Per vergelijking kies je één winkel.";
+  if (mode === "segment") return "Vergelijk winkelsegmenten met elkaar, zoals Lunchroom tegenover Levensmiddelen.";
+  if (mode === "leeftijdsgroep") return "Vergelijk leeftijdsgroepen met elkaar, bijvoorbeeld 18-24 tegenover 65+.";
+  return "Maak handmatige vergelijkingen door campagne, periode, winkel, segment en leeftijdsgroep te combineren.";
+}
+
+function ComparisonBuilder({
+  compareItems,
+  setCompareItems,
+  compareMode,
+  setCompareMode,
+  winkelOptions,
+  segmentOptions,
+  leeftijdOptions,
+}: {
+  compareItems: DashboardCompareItem[];
+  setCompareItems: (items: DashboardCompareItem[]) => void;
+  compareMode: CompareMode;
+  setCompareMode: (mode: CompareMode) => void;
+  winkelOptions: string[];
+  segmentOptions: string[];
+  leeftijdOptions: string[];
+}) {
+  const updateItem = (
+    id: string,
+    updater: (item: DashboardCompareItem) => DashboardCompareItem
+  ) => {
+    setCompareItems(compareItems.map((item) => (item.id === id ? updater(item) : item)));
+  };
+
+  const addCompareItem = () => {
+    setCompareItems([
+      ...compareItems,
+      createDefaultCompareItem(`Vergelijking ${compareItems.length + 1}`),
+    ]);
+  };
+
+  const removeCompareItem = (id: string) => {
+    if (compareItems.length <= 1) return;
+    setCompareItems(compareItems.filter((item) => item.id !== id));
+  };
+
+  const onCompareModeChange = (mode: CompareMode) => {
+    setCompareMode(mode);
+    setCompareItems(
+      compareItems.map((item) => ({
+        ...item,
+        filters: sanitizeCompareFilters(item.filters, mode),
+      }))
+    );
+  };
+
+  const showDateFields = compareMode === "custom" || compareMode === "periode";
+  const showWinkelField = compareMode === "custom" || compareMode === "winkel";
+  const showSegmentField = compareMode === "custom" || compareMode === "segment";
+  const showLeeftijdField = compareMode === "custom" || compareMode === "leeftijdsgroep";
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Vergelijkingen instellen</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-4 rounded-md border bg-muted/40 p-3 md:grid-cols-[280px_1fr] md:items-end">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Vergelijk op</Label>
+            <Select value={compareMode} onValueChange={(value) => onCompareModeChange(value as CompareMode)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Vergelijk op" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="custom">Handmatig</SelectItem>
+                <SelectItem value="periode">Periode</SelectItem>
+                <SelectItem value="winkel">Winkel</SelectItem>
+                <SelectItem value="segment">Segment</SelectItem>
+                <SelectItem value="leeftijdsgroep">Leeftijdsgroep</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-sm text-muted-foreground">{getCompareModeHelp(compareMode)}</p>
+        </div>
+
+        <div className="space-y-3">
+          {compareItems.map((item, index) => (
+            <div key={item.id} className="grid gap-3 rounded-md border p-3 lg:grid-cols-12">
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Naam</Label>
+                <Input
+                  value={item.label}
+                  placeholder={`Vergelijking ${index + 1}`}
+                  onChange={(e) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      label: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Campagne</Label>
+                <Select
+                  value={item.campaignId}
+                  onValueChange={(value) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      campaignId: value,
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Campagne" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {campaigns.map((campaign) => (
+                      <SelectItem key={campaign.id} value={campaign.id}>
+                        {campaign.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {showDateFields && (
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Datum vanaf</Label>
+                <Input
+                  type="date"
+                  value={item.filters.dateFrom || ""}
+                  onChange={(e) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      filters: {
+                        ...current.filters,
+                        dateFrom: e.target.value || undefined,
+                      },
+                    }))
+                  }
+                />
+              </div>
+              )}
+
+              {showDateFields && (
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Datum t/m</Label>
+                <Input
+                  type="date"
+                  value={item.filters.dateTo || ""}
+                  onChange={(e) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      filters: {
+                        ...current.filters,
+                        dateTo: e.target.value || undefined,
+                      },
+                    }))
+                  }
+                />
+              </div>
+              )}
+
+              {showWinkelField && (
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Winkel</Label>
+                <Select
+                  value={item.filters.winkel || ALL}
+                  onValueChange={(value) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      filters: {
+                        ...current.filters,
+                        winkel: value === ALL ? undefined : value,
+                      },
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Alle winkels" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value={ALL}>Alle winkels</SelectItem>
+                    {winkelOptions.map((winkel) => (
+                      <SelectItem key={winkel} value={winkel}>
+                        {winkel}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              )}
+
+              {showSegmentField && (
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Segment</Label>
+                <Select
+                  value={item.filters.segment || ALL}
+                  onValueChange={(value) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      filters: {
+                        ...current.filters,
+                        segment: value === ALL ? undefined : value,
+                      },
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Alle" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value={ALL}>Alle segmenten</SelectItem>
+                    {segmentOptions.map((segment) => (
+                      <SelectItem key={segment} value={segment}>
+                        {segment}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              )}
+
+              {showLeeftijdField && (
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label className="text-xs">Leeftijdsgroep</Label>
+                <Select
+                  value={item.filters.leeftijdsgroep || ALL}
+                  onValueChange={(value) =>
+                    updateItem(item.id, (current) => ({
+                      ...current,
+                      filters: {
+                        ...current.filters,
+                        leeftijdsgroep: value === ALL ? undefined : value,
+                      },
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Alle leeftijden" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value={ALL}>Alle leeftijden</SelectItem>
+                    {leeftijdOptions.map((leeftijd) => (
+                      <SelectItem key={leeftijd} value={leeftijd}>
+                        {leeftijd}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              )}
+
+              <div className="flex items-end lg:col-span-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={compareItems.length <= 1}
+                  onClick={() => removeCompareItem(item.id)}
+                >
+                  Verwijder
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <Button type="button" variant="outline" onClick={addCompareItem}>
+          + Vergelijking toevoegen
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+
 /* ───────────────────────────── OBM VIEW ───────────────────────────── */
 
 function CentrumView() {
   const [filters, setFilters] = useState<Filters>({});
   const [isCompareMode, setIsCompareMode] = useState(false);
+  const [compareMode, setCompareMode] = useState<CompareMode>("periode");
   const [campaignId, setCampaignId] = useState(campaigns[0].id);
-  const [compareCampaignId, setCompareCampaignId] = useState(
-    campaigns[1]?.id ?? campaigns[0].id
-  );
+  const [compareItems, setCompareItems] = useState<DashboardCompareItem[]>([
+    createDefaultCompareItem("April", campaigns[0].id, {
+      dateFrom: "2026-04-01",
+      dateTo: "2026-04-30",
+    }),
+    createDefaultCompareItem("Mei", campaigns[0].id, {
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+    }),
+  ]);
 
   const selectedCampaign =
     campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
-
-  const compareCampaign =
-  campaigns.find((campaign) => campaign.id === compareCampaignId) ?? campaigns[1] ?? campaigns[0];
-
-  const compareData = compareCampaign.rows;
-  const compareFiltered = useMemo(
-    () => applyFilters(compareData, filters),
-    [compareData, filters]
-  );
-
-  const compareWon = compareFiltered.filter(isWon).length;
-  const compareRedeemed = compareFiltered.filter(isRedeemed).length;
-  const compareRedeemRate = pct(compareRedeemed, compareWon);
 
   const data = selectedCampaign.rows;
 
@@ -299,7 +701,7 @@ function CentrumView() {
 
   const options = useMemo(
     () => ({
-      winkels: uniqueSorted(data.map((r) => r.winkel_inwissel || r.winkel_uitgever)),
+      winkels: uniqueSorted(data.map((r) => getRowStoreName(r))),
       coupon_types: uniqueSorted(data.map((r) => r.coupon_type)),
       leeftijden: uniqueSorted(data.map((r) => r.leeftijdsgroep)),
       kanalen: uniqueSorted(data.map((r) => r.kanaal)),
@@ -310,6 +712,31 @@ function CentrumView() {
     [data],
   );
 
+  const compareWinkelOptions = useMemo(
+    () =>
+      uniqueSorted(
+        campaigns.flatMap((campaign) =>
+          campaign.rows.map((row) => getRowStoreName(row))
+        )
+      ),
+    []
+  );
+
+  const compareSegmentOptions = useMemo(
+    () => uniqueSorted(centrumNieuwVennep.stores.map((store) => store.segment)),
+    []
+  );
+
+  const compareLeeftijdOptions = useMemo(
+    () =>
+      uniqueSorted(
+        campaigns.flatMap((campaign) =>
+          campaign.rows.map((row) => row.leeftijdsgroep)
+        )
+      ),
+    []
+  );
+
   const filtered = useMemo(() => applyFilters(data, filters), [data, filters]);
 
   const won = filtered.filter(isWon).length;
@@ -317,29 +744,29 @@ function CentrumView() {
   const redeemed = filtered.filter(isRedeemed).length;
   const redeemRate = pct(redeemed, won);
 
-  const trend = useMemo(() => {
-    const byWeek = new Map<string, number>();
+  const trend = useMemo(() => buildTrendFromRows(filtered), [filtered]);
 
-    for (const r of filtered) {
-      const d = r["datum_uitgeleverd"];
-      if (!d) continue;
+  const comparisonData = useMemo(
+    () =>
+      buildComparisonData(
+        compareItems.map((item) => ({
+          ...item,
+          label: buildCompareItemLabel(item),
+        }))
+      ) as ComparisonDataItem[],
+    [compareItems]
+  );
 
-      const key = getWeekStart(d);
-      if (!key) continue;
-
-      byWeek.set(key, (byWeek.get(key) || 0) + 1);
-    }
-
-    return Array.from(byWeek.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([week, value]) => ({ week, aanmeldingen: value }));
-  }, [filtered]);
+  const compareTrend = useMemo(
+    () => buildComparisonTrend(comparisonData),
+    [comparisonData]
+  );
 
   const topWinkels = useMemo(() => {
     const m = new Map<string, { winkel: string; gewonnen: number; ingewisseld: number }>();
 
     for (const r of filtered) {
-      const w = r.winkel_inwissel || r.winkel_uitgever;
+      const w = getRowStoreName(r);
       if (!w) continue;
 
       const e = m.get(w) || { winkel: w, gewonnen: 0, ingewisseld: 0 };
@@ -353,13 +780,13 @@ function CentrumView() {
 
   const ageGender = useMemo(() => {
     const ages = uniqueSorted(filtered.filter(isWon).map((r) => r.leeftijdsgroep));
-    const genders = uniqueSorted(filtered.filter(isWon).map((r) => r["wat_is_uw_geslacht"]));
+    const genderOrder = ["Man", "Vrouw", "Onbekend"];
 
     return ages.map((a) => {
       const row: Record<string, string | number> = { leeftijd: a };
-      for (const g of genders) {
-        row[g] = filtered.filter(
-          (r) => isWon(r) && r.leeftijdsgroep === a && r["wat_is_uw_geslacht"] === g,
+      for (const gender of genderOrder) {
+        row[gender] = filtered.filter(
+          (r) => isWon(r) && r.leeftijdsgroep === a && r.wat_is_uw_geslacht === gender,
         ).length;
       }
       return row;
@@ -370,7 +797,7 @@ function CentrumView() {
     const preferredOrder = ["Man", "Vrouw", "Onbekend"];
 
     return preferredOrder.filter((gender) =>
-      filtered.some((r) => isWon(r) && r["wat_is_uw_geslacht"] === gender)
+      filtered.some((r) => isWon(r) && r.wat_is_uw_geslacht === gender)
     );
   }, [filtered]);
 
@@ -395,23 +822,14 @@ function CentrumView() {
       <Card>
         <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end md:justify-between">
           <div className="flex flex-col gap-4 md:flex-row md:items-end">
-
             <CampaignSelect
               campaignId={campaignId}
               setCampaignId={(id) => {
                 setCampaignId(id);
                 setFilters({});
               }}
-              label={isCompareMode ? "Campagne A" : "Campagne"}
+              label="Campagne"
             />
-
-            {isCompareMode && (
-              <CampaignSelect
-                campaignId={compareCampaignId}
-                setCampaignId={setCompareCampaignId}
-                label="Campagne B"
-              />
-            )}
           </div>
 
           <div className="text-sm text-muted-foreground">
@@ -424,24 +842,42 @@ function CentrumView() {
       </Card>
 
       <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Vergelijken</h2>
+        <CardContent className="flex flex-col gap-4 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Vergelijken</h2>
+              <p className="text-sm text-muted-foreground">
+                Vergelijk campagnes, maanden, winkels of segmenten. De vergelijkingen worden ook als lijnen in de grafiek getoond.
+              </p>
+            </div>
 
-              <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
-                <input
-                  type="checkbox"
-                  checked={isCompareMode}
-                  onChange={(e) => setIsCompareMode(e.target.checked)}
-                />
-                Vergelijk campagnes
-              </label>
+            <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
+              <input
+                type="checkbox"
+                checked={isCompareMode}
+                onChange={(e) => setIsCompareMode(e.target.checked)}
+              />
+              Vergelijkingen tonen
+            </label>
           </div>
         </CardContent>
       </Card>
 
+      {isCompareMode && (
+        <ComparisonBuilder
+          compareItems={compareItems}
+          setCompareItems={setCompareItems}
+          compareMode={compareMode}
+          setCompareMode={setCompareMode}
+          winkelOptions={compareWinkelOptions}
+          segmentOptions={compareSegmentOptions}
+          leeftijdOptions={compareLeeftijdOptions}
+        />
+      )}
 
-      <FilterBar filters={filters} setFilters={setFilters} options={options} />
+      {!isCompareMode && (
+        <FilterBar filters={filters} setFilters={setFilters} options={options} />
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-8">
         <Kpi
@@ -495,61 +931,81 @@ function CentrumView() {
       </div>
 
       {isCompareMode && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            Vergelijking: {selectedCampaign.name} vs {compareCampaign.name}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-auto rounded-md border">
-            <Table>
-              <TableHeader className="bg-muted">
-                <TableRow>
-                  <TableHead>KPI</TableHead>
-                  <TableHead className="text-right">{selectedCampaign.name}</TableHead>
-                  <TableHead className="text-right">{compareCampaign.name}</TableHead>
-                  <TableHead className="text-right">Verschil</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow>
-                  <TableCell>Coupons gewonnen</TableCell>
-                  <TableCell className="text-right">{won}</TableCell>
-                  <TableCell className="text-right">{compareWon}</TableCell>
-                  <TableCell className="text-right">{won - compareWon}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Coupons ingewisseld</TableCell>
-                  <TableCell className="text-right">{redeemed}</TableCell>
-                  <TableCell className="text-right">{compareRedeemed}</TableCell>
-                  <TableCell className="text-right">{redeemed - compareRedeemed}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Redeem rate</TableCell>
-                  <TableCell className="text-right">{fmtPct(redeemRate)}</TableCell>
-                  <TableCell className="text-right">{fmtPct(compareRedeemRate)}</TableCell>
-                  <TableCell className="text-right">
-                    {fmtPct(redeemRate - compareRedeemRate)}
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
-    )}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Vergelijkingsoverzicht</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-auto rounded-md border">
+              <Table>
+                <TableHeader className="bg-muted">
+                  <TableRow>
+                    <TableHead>Vergelijking</TableHead>
+                    <TableHead>Campagne</TableHead>
+                    <TableHead>Periode</TableHead>
+                    <TableHead>Winkel</TableHead>
+                    <TableHead>Segment</TableHead>
+                    <TableHead>Leeftijd</TableHead>
+                    <TableHead className="text-right">Gewonnen</TableHead>
+                    <TableHead className="text-right">Opgehaald</TableHead>
+                    <TableHead className="text-right">Redeem rate</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {comparisonData.map((item) => {
+                    const campaign = campaigns.find((c) => c.id === item.campaignId);
+
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell className="font-medium">{item.label}</TableCell>
+                        <TableCell>{campaign?.name ?? item.campaignId}</TableCell>
+                        <TableCell>
+                          {item.filters.dateFrom || "..."} t/m {item.filters.dateTo || "..."}
+                        </TableCell>
+                        <TableCell>{item.filters.winkel || "Alle winkels"}</TableCell>
+                        <TableCell>{item.filters.segment || "Alle segmenten"}</TableCell>
+                        <TableCell>{item.filters.leeftijdsgroep || "Alle leeftijden"}</TableCell>
+                        <TableCell className="text-right tabular-nums">{item.won}</TableCell>
+                        <TableCell className="text-right tabular-nums">{item.redeemed}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtPct(item.redeemRate)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <ChartCard title="Aanmeldingen per week" info="Op basis van 'datum_uitgeleverd'.">
+        <ChartCard
+          title={isCompareMode ? "Aanmeldingen per week — vergelijking" : "Aanmeldingen per week"}
+          info="Op basis van 'datum_uitgeleverd'."
+        >
           <div className="h-72">
             <ResponsiveContainer>
-              <LineChart data={trend} margin={{ left: 0, right: 16, top: 8 }}>
+              <LineChart data={isCompareMode ? compareTrend : trend} margin={{ left: 0, right: 16, top: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="week" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
                 <RTooltip />
-                <Line type="monotone" dataKey="aanmeldingen" stroke="#00E5AC" strokeWidth={2.5} dot={false} />
+                {isCompareMode && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                {isCompareMode ? (
+                  comparisonData.map((item, i) => (
+                    <Line
+                      key={item.id}
+                      type="monotone"
+                      dataKey={item.label}
+                      name={item.label}
+                      stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                      strokeWidth={2.5}
+                      dot={false}
+                    />
+                  ))
+                ) : (
+                  <Line type="monotone" dataKey="aanmeldingen" stroke="#00E5AC" strokeWidth={2.5} dot={false} />
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -696,7 +1152,7 @@ function WinkelierView() {
     campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
   const data = selectedCampaign.rows;
 
-  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_uitgever)), [data]);
+  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_inwissel)), [data]);
   const [winkel, setWinkel] = useState<string>("");
 
   useEffect(() => {
@@ -710,7 +1166,7 @@ function WinkelierView() {
     }
   }, [winkel, winkels]);
 
-  const rows = useMemo(() => data.filter((r) => r.winkel_uitgever === winkel), [data, winkel]);
+  const rows = useMemo(() => data.filter((r) => r.winkel_inwissel === winkel), [data, winkel]);
   const won = rows.filter(isWon).length;
   const redeemed = rows.filter(isRedeemed).length;
   const claimed = rows.filter(isClaimed).length;
@@ -720,22 +1176,11 @@ function WinkelierView() {
     const m = new Map<string, { key: string; type: string; waarde: string; gewonnen: number; ingewisseld: number }>();
 
     for (const r of rows) {
-      if (!r.coupon_type) continue;
-
-      const waarde = r.coupon_waarde || "-";
-      const key = `${r.coupon_type} — ${waarde}`;
-
-      const e = m.get(key) || {
-        key,
-        type: r.coupon_type,
-        waarde,
-        gewonnen: 0,
-        ingewisseld: 0,
-      };
-
+      if (!r.coupon_type || !r.coupon_waarde) continue;
+      const key = `${r.coupon_type} — ${r.coupon_waarde}`;
+      const e = m.get(key) || { key, type: r.coupon_type, waarde: r.coupon_waarde, gewonnen: 0, ingewisseld: 0 };
       if (isWon(r)) e.gewonnen += 1;
       if (isRedeemed(r)) e.ingewisseld += 1;
-
       m.set(key, e);
     }
 
@@ -746,7 +1191,7 @@ function WinkelierView() {
     const byWeek = new Map<string, number>();
 
     for (const r of rows.filter(isRedeemed)) {
-      const d = r["datum_opgehaald"];
+      const d = r["Datum opgehaald"];
       if (!d) continue;
 
       const key = getWeekStart(d);
@@ -775,7 +1220,7 @@ function WinkelierView() {
 
     const dayMap = new Map<string, number>();
     rows.filter(isRedeemed).forEach((r) => {
-      if (r["datum_opgehaald"]) dayMap.set(r["datum_opgehaald"], (dayMap.get(r["datum_opgehaald"]) || 0) + 1);
+      if (r["Datum opgehaald"]) dayMap.set(r["Datum opgehaald"], (dayMap.get(r["Datum opgehaald"]) || 0) + 1);
     });
     const peak = Array.from(dayMap.entries()).sort((a, b) => b[1] - a[1])[0];
     if (peak) list.push(`Piekdag: ${peak[0]} (${peak[1]} inwisselingen)`);
@@ -1154,10 +1599,10 @@ export default function Index() {
             <p><strong>Totaal winkels:</strong> aantal winkels binnen het gekoppelde winkelcentrum.</p>
             <p><strong>Deelnemende winkels:</strong> aantal winkels dat gekoppeld is aan de geselecteerde campagne.</p>
             <p><strong>Segmentoverzicht:</strong> verdeling van deelnemende winkels op basis van winkelsegment.</p>
-            <p><strong>Coupons gewonnen:</strong> prijs_gewonnen = TRUE, óf status ∈ {"{won, redeemed}"}.</p>
+            <p><strong>Coupons gewonnen:</strong> Prijsgewonnen = TRUE, óf status ∈ {"{won, redeemed}"}.</p>
             <p><strong>Coupons ingewisseld:</strong> status = redeemed.</p>
             <p><strong>Redeem rate:</strong> ingewisseld ÷ gewonnen.</p>
-            <p><strong>Time-to-redeem:</strong> datum_opgehaald − datum_uitgeleverd (alleen indien beide gevuld).</p>
+            <p><strong>Time-to-redeem:</strong> Datum opgehaald − Datum uitgeleverd (alleen indien beide gevuld).</p>
             <p><strong>Niet volledig meetbaar:</strong> Cross-store flow (winkel_uitgever → winkel_inwissel) wordt alleen getoond als de uitgeverskolom voldoende compleet is.</p>
           </div>
         </details>
