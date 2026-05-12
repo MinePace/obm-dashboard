@@ -260,11 +260,20 @@ function ChartCard({
   );
 }
 
+type CompareMode = "campagne" | "periode" | "winkel" | "segment" | "leeftijdsgroep";
+
 type DashboardCompareItem = Omit<CompareItem, "filters"> & {
   filters: Filters;
+  compareMode?: CompareMode;
+  compareValue?: string;
 };
 
-type CompareMode = "custom" | "periode" | "winkel" | "segment" | "leeftijdsgroep";
+type CompareOption = {
+  value: string;
+  label: string;
+  filters: Filters;
+  campaignId?: string;
+};
 
 type ComparisonDataItem = {
   id: string;
@@ -275,6 +284,8 @@ type ComparisonDataItem = {
   won: number;
   redeemed: number;
   redeemRate: number;
+  compareMode?: CompareMode;
+  compareValue?: string;
 };
 
 const createCompareId = () => {
@@ -297,6 +308,22 @@ function getRowStoreName(row: Campaign["rows"][number]) {
   return r.winkel_inwissel || r.winkel_uitgever || null;
 }
 
+function normalizeText(value: string | null | undefined) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function getSegmentForStoreName(storeName: string | null | undefined) {
+  const normalizedStoreName = normalizeText(storeName);
+
+  if (!normalizedStoreName) return null;
+
+  return (
+    centrumNieuwVennep.stores.find(
+      (store) => normalizeText(store.name) === normalizedStoreName
+    )?.segment ?? null
+  );
+}
+
 function buildTrendFromRows(rows: Campaign["rows"], dataKey = "aanmeldingen") {
   const byWeek = new Map<string, number>();
 
@@ -315,138 +342,215 @@ function buildTrendFromRows(rows: Campaign["rows"], dataKey = "aanmeldingen") {
     .map(([week, value]) => ({ week, [dataKey]: value }));
 }
 
-function buildComparisonTrend(items: ComparisonDataItem[]) {
-  const weekMap = new Map<string, Record<string, string | number>>();
+function getCampaignName(campaignId: string) {
+  return campaigns.find((campaign) => campaign.id === campaignId)?.name ?? campaignId;
+}
+
+function getComparisonChartKey(item: ComparisonDataItem) {
+  return `${item.label} — ${getCampaignName(item.campaignId)}`;
+}
+
+function buildComparisonTrend(items: ComparisonDataItem[], compareMode: CompareMode) {
+  const xKey = compareMode === "periode" ? "dag" : "week";
+  const trendMap = new Map<string, Record<string, string | number>>();
+
+  if (compareMode === "periode") {
+    for (let day = 1; day <= 31; day++) {
+      trendMap.set(String(day), { [xKey]: String(day) });
+    }
+  }
 
   for (const item of items) {
     for (const row of item.rows) {
       const date = getRowDate(row);
       if (!date) continue;
 
-      const week = getWeekStart(date);
-      if (!week) continue;
+      const key =
+        compareMode === "periode"
+          ? String(new Date(date).getDate())
+          : getWeekStart(date);
 
-      const existing = weekMap.get(week) ?? { week };
-      existing[item.label] = Number(existing[item.label] ?? 0) + 1;
-      weekMap.set(week, existing);
+      if (!key || key === "NaN") continue;
+
+      const existing = trendMap.get(key) ?? { [xKey]: key };
+      const chartKey = getComparisonChartKey(item);
+      existing[chartKey] = Number(existing[chartKey] ?? 0) + 1;
+      trendMap.set(key, existing);
     }
   }
 
-  return Array.from(weekMap.values()).sort((a, b) =>
-    String(a.week).localeCompare(String(b.week))
-  );
+  return Array.from(trendMap.values()).sort((a, b) => {
+    if (compareMode === "periode") return Number(a[xKey]) - Number(b[xKey]);
+    return String(a[xKey]).localeCompare(String(b[xKey]));
+  });
 }
 
-function buildCompareItemLabel(item: DashboardCompareItem) {
-  if (item.label.trim()) return item.label.trim();
+function getMonthDateRange(month: string): Pick<Filters, "dateFrom" | "dateTo"> {
+  const [year, monthNumber] = month.split("-").map(Number);
 
-  const campaign = campaigns.find((c) => c.id === item.campaignId);
-  if (item.filters.winkel) return item.filters.winkel;
-  if (item.filters.segment) return item.filters.segment;
-  if (item.filters.leeftijdsgroep) return item.filters.leeftijdsgroep;
-  if (item.filters.dateFrom || item.filters.dateTo) {
-    return `${item.filters.dateFrom || "..."} t/m ${item.filters.dateTo || "..."}`;
-  }
+  if (!year || !monthNumber) return {};
 
-  return campaign?.name ?? "Vergelijking";
-}
+  const lastDay = new Date(year, monthNumber, 0).getDate();
 
-function createDefaultCompareItem(
-  label: string,
-  campaignId = campaigns[0].id,
-  filters: Filters = {}
-): DashboardCompareItem {
   return {
-    id: createCompareId(),
-    label,
-    campaignId,
-    filters,
+    dateFrom: `${month}-01`,
+    dateTo: `${month}-${String(lastDay).padStart(2, "0")}`,
   };
 }
 
-function sanitizeCompareFilters(filters: Filters, mode: CompareMode): Filters {
-  if (mode === "custom") return filters;
+function formatMonthLabel(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+
+  if (!year || !monthNumber) return month;
+
+  return new Intl.DateTimeFormat("nl-NL", {
+    month: "long",
+    year: "numeric",
+  }).format(new Date(year, monthNumber - 1, 1));
+}
+
+function buildCompareOptions(mode: CompareMode, campaign: Campaign): CompareOption[] {
+  if (mode === "campagne") {
+    return campaigns.map((campaignOption) => ({
+      value: campaignOption.id,
+      label: campaignOption.name,
+      campaignId: campaignOption.id,
+      filters: {},
+    }));
+  }
 
   if (mode === "periode") {
-    return {
-      dateFrom: filters.dateFrom,
-      dateTo: filters.dateTo,
-    };
+    return uniqueSorted(
+      campaign.rows
+        .map((row) => getRowDate(row)?.slice(0, 7))
+        .filter((month): month is string => Boolean(month))
+    ).map((month) => ({
+      value: month,
+      label: formatMonthLabel(month),
+      filters: getMonthDateRange(month),
+    }));
   }
 
   if (mode === "winkel") {
-    return { winkel: filters.winkel };
+    return uniqueSorted(campaign.rows.map((row) => getRowStoreName(row))).map((winkel) => ({
+      value: winkel,
+      label: winkel,
+      filters: { winkel },
+    }));
   }
 
   if (mode === "segment") {
-    return { segment: filters.segment };
+    const segmentsInCampaign = uniqueSorted(
+      campaign.rows.map((row) => getSegmentForStoreName(getRowStoreName(row)))
+    );
+
+    const segments = segmentsInCampaign.length
+      ? segmentsInCampaign
+      : uniqueSorted(centrumNieuwVennep.stores.map((store) => store.segment));
+
+    return segments.map((segment) => ({
+      value: segment,
+      label: segment,
+      filters: { segment },
+    }));
   }
 
-  if (mode === "leeftijdsgroep") {
-    return { leeftijdsgroep: filters.leeftijdsgroep };
-  }
+  return uniqueSorted(campaign.rows.map((row) => row.leeftijdsgroep)).map((leeftijdsgroep) => ({
+    value: leeftijdsgroep,
+    label: leeftijdsgroep,
+    filters: { leeftijdsgroep },
+  }));
+}
 
-  return filters;
+function createCompareItemFromOption(
+  mode: CompareMode,
+  option: CompareOption,
+  baseCampaignId: string
+): DashboardCompareItem {
+  return {
+    id: `${mode}-${option.campaignId ?? baseCampaignId}-${option.value}`,
+    label: option.label,
+    campaignId: option.campaignId ?? baseCampaignId,
+    filters: option.filters,
+    compareMode: mode,
+    compareValue: option.value,
+  };
+}
+
+function isSameCompareItem(
+  item: DashboardCompareItem,
+  mode: CompareMode,
+  option: CompareOption,
+  baseCampaignId: string
+) {
+  return (
+    item.compareMode === mode &&
+    item.compareValue === option.value &&
+    item.campaignId === (option.campaignId ?? baseCampaignId)
+  );
 }
 
 function getCompareModeHelp(mode: CompareMode) {
-  if (mode === "periode") return "Vergelijk periodes binnen dezelfde of verschillende campagnes, bijvoorbeeld april tegenover mei.";
-  if (mode === "winkel") return "Vergelijk winkels met elkaar. Per vergelijking kies je één winkel.";
-  if (mode === "segment") return "Vergelijk winkelsegmenten met elkaar, zoals Lunchroom tegenover Levensmiddelen.";
-  if (mode === "leeftijdsgroep") return "Vergelijk leeftijdsgroepen met elkaar, bijvoorbeeld 18-24 tegenover 65+.";
-  return "Maak handmatige vergelijkingen door campagne, periode, winkel, segment en leeftijdsgroep te combineren.";
+  if (mode === "campagne") return "Vink campagnes aan om campagnes direct met elkaar te vergelijken.";
+  if (mode === "periode") return "Vink maanden aan om periodes binnen de geselecteerde campagne te vergelijken.";
+  if (mode === "winkel") return "Vink winkels aan om winkels binnen de geselecteerde campagne te vergelijken.";
+  if (mode === "segment") return "Vink segmenten aan om winkelsegmenten met elkaar te vergelijken.";
+  return "Vink leeftijdsgroepen aan om leeftijdsgroepen met elkaar te vergelijken.";
 }
 
 function ComparisonBuilder({
-  compareItems,
-  setCompareItems,
   compareMode,
   setCompareMode,
-  winkelOptions,
-  segmentOptions,
-  leeftijdOptions,
+  baseCampaignId,
+  setBaseCampaignId,
+  compareOptions,
+  compareItems,
+  setCompareItems,
 }: {
-  compareItems: DashboardCompareItem[];
-  setCompareItems: (items: DashboardCompareItem[]) => void;
   compareMode: CompareMode;
   setCompareMode: (mode: CompareMode) => void;
-  winkelOptions: string[];
-  segmentOptions: string[];
-  leeftijdOptions: string[];
+  baseCampaignId: string;
+  setBaseCampaignId: (id: string) => void;
+  compareOptions: CompareOption[];
+  compareItems: DashboardCompareItem[];
+  setCompareItems: (items: DashboardCompareItem[]) => void;
 }) {
-  const updateItem = (
-    id: string,
-    updater: (item: DashboardCompareItem) => DashboardCompareItem
-  ) => {
-    setCompareItems(compareItems.map((item) => (item.id === id ? updater(item) : item)));
-  };
+  const isOptionChecked = (option: CompareOption) =>
+    compareItems.some((item) => isSameCompareItem(item, compareMode, option, baseCampaignId));
 
-  const addCompareItem = () => {
-    setCompareItems([
-      ...compareItems,
-      createDefaultCompareItem(`Vergelijking ${compareItems.length + 1}`),
-    ]);
-  };
+  const toggleOption = (option: CompareOption, checked: boolean) => {
+    if (checked) {
+      if (isOptionChecked(option)) return;
+      setCompareItems([
+        ...compareItems,
+        createCompareItemFromOption(compareMode, option, baseCampaignId),
+      ]);
+      return;
+    }
 
-  const removeCompareItem = (id: string) => {
-    if (compareItems.length <= 1) return;
-    setCompareItems(compareItems.filter((item) => item.id !== id));
-  };
-
-  const onCompareModeChange = (mode: CompareMode) => {
-    setCompareMode(mode);
     setCompareItems(
-      compareItems.map((item) => ({
-        ...item,
-        filters: sanitizeCompareFilters(item.filters, mode),
-      }))
+      compareItems.filter(
+        (item) => !isSameCompareItem(item, compareMode, option, baseCampaignId)
+      )
     );
   };
 
-  const showDateFields = compareMode === "custom" || compareMode === "periode";
-  const showWinkelField = compareMode === "custom" || compareMode === "winkel";
-  const showSegmentField = compareMode === "custom" || compareMode === "segment";
-  const showLeeftijdField = compareMode === "custom" || compareMode === "leeftijdsgroep";
+  const selectAll = () => {
+    const newItems = compareOptions
+      .filter((option) => !isOptionChecked(option))
+      .map((option) => createCompareItemFromOption(compareMode, option, baseCampaignId));
+
+    setCompareItems([...compareItems, ...newItems]);
+  };
+
+  const clearAll = () => setCompareItems([]);
+
+  const onCompareModeChange = (mode: CompareMode) => {
+    setCompareMode(mode);
+    setCompareItems([]);
+  };
+
+  const selectedInCurrentView = compareOptions.filter(isOptionChecked).length;
 
   return (
     <Card>
@@ -454,7 +558,27 @@ function ComparisonBuilder({
         <CardTitle className="text-base">Vergelijkingen instellen</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-4 rounded-md border bg-muted/40 p-3 md:grid-cols-[280px_1fr] md:items-end">
+        {compareItems.length > 0 && (
+          <div className="rounded-md border p-3">
+            <div className="mb-2 text-sm font-medium">Actieve vergelijkingen</div>
+            <div className="flex flex-wrap gap-2">
+              {compareItems.map((item) => {
+                const campaign = campaigns.find((c) => c.id === item.campaignId);
+
+                return (
+                  <span
+                    key={item.id}
+                    className="rounded-md bg-muted px-3 py-2 text-sm"
+                  >
+                    {campaign?.name ?? item.campaignId} — {item.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4 rounded-md border bg-muted/40 p-3 md:grid-cols-[280px_280px_1fr] md:items-end">
           <div className="space-y-1.5">
             <Label className="text-xs">Vergelijk op</Label>
             <Select value={compareMode} onValueChange={(value) => onCompareModeChange(value as CompareMode)}>
@@ -462,7 +586,7 @@ function ComparisonBuilder({
                 <SelectValue placeholder="Vergelijk op" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="custom">Handmatig</SelectItem>
+                <SelectItem value="campagne">Campagne</SelectItem>
                 <SelectItem value="periode">Periode</SelectItem>
                 <SelectItem value="winkel">Winkel</SelectItem>
                 <SelectItem value="segment">Segment</SelectItem>
@@ -470,196 +594,65 @@ function ComparisonBuilder({
               </SelectContent>
             </Select>
           </div>
-          <p className="text-sm text-muted-foreground">{getCompareModeHelp(compareMode)}</p>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Campagnebron</Label>
+            <Select
+              value={baseCampaignId}
+              onValueChange={setBaseCampaignId}
+              disabled={compareMode === "campagne"}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Campagne" />
+              </SelectTrigger>
+              <SelectContent>
+                {campaigns.map((campaign) => (
+                  <SelectItem key={campaign.id} value={campaign.id}>
+                    {campaign.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="text-sm text-muted-foreground">
+            {getCompareModeHelp(compareMode)} Wisselen van vergelijkcategorie wist de selectie, zodat je alleen dezelfde soorten met elkaar vergelijkt.
+          </div>
         </div>
 
-        <div className="space-y-3">
-          {compareItems.map((item, index) => (
-            <div key={item.id} className="grid gap-3 rounded-md border p-3 lg:grid-cols-12">
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Naam</Label>
-                <Input
-                  value={item.label}
-                  placeholder={`Vergelijking ${index + 1}`}
-                  onChange={(e) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      label: e.target.value,
-                    }))
-                  }
-                />
-              </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={selectAll}>
+            Alles selecteren
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={clearAll}>
+            Selectie wissen
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            {selectedInCurrentView} van {compareOptions.length} geselecteerd in huidige bron · {compareItems.length} totaal
+          </span>
+        </div>
 
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Campagne</Label>
-                <Select
-                  value={item.campaignId}
-                  onValueChange={(value) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      campaignId: value,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Campagne" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {campaigns.map((campaign) => (
-                      <SelectItem key={campaign.id} value={campaign.id}>
-                        {campaign.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {showDateFields && (
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Datum vanaf</Label>
-                <Input
-                  type="date"
-                  value={item.filters.dateFrom || ""}
-                  onChange={(e) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      filters: {
-                        ...current.filters,
-                        dateFrom: e.target.value || undefined,
-                      },
-                    }))
-                  }
-                />
-              </div>
-              )}
-
-              {showDateFields && (
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Datum t/m</Label>
-                <Input
-                  type="date"
-                  value={item.filters.dateTo || ""}
-                  onChange={(e) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      filters: {
-                        ...current.filters,
-                        dateTo: e.target.value || undefined,
-                      },
-                    }))
-                  }
-                />
-              </div>
-              )}
-
-              {showWinkelField && (
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Winkel</Label>
-                <Select
-                  value={item.filters.winkel || ALL}
-                  onValueChange={(value) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      filters: {
-                        ...current.filters,
-                        winkel: value === ALL ? undefined : value,
-                      },
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Alle winkels" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-72">
-                    <SelectItem value={ALL}>Alle winkels</SelectItem>
-                    {winkelOptions.map((winkel) => (
-                      <SelectItem key={winkel} value={winkel}>
-                        {winkel}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              )}
-
-              {showSegmentField && (
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Segment</Label>
-                <Select
-                  value={item.filters.segment || ALL}
-                  onValueChange={(value) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      filters: {
-                        ...current.filters,
-                        segment: value === ALL ? undefined : value,
-                      },
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Alle" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-72">
-                    <SelectItem value={ALL}>Alle segmenten</SelectItem>
-                    {segmentOptions.map((segment) => (
-                      <SelectItem key={segment} value={segment}>
-                        {segment}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              )}
-
-              {showLeeftijdField && (
-              <div className="space-y-1.5 lg:col-span-2">
-                <Label className="text-xs">Leeftijdsgroep</Label>
-                <Select
-                  value={item.filters.leeftijdsgroep || ALL}
-                  onValueChange={(value) =>
-                    updateItem(item.id, (current) => ({
-                      ...current,
-                      filters: {
-                        ...current.filters,
-                        leeftijdsgroep: value === ALL ? undefined : value,
-                      },
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Alle leeftijden" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-72">
-                    <SelectItem value={ALL}>Alle leeftijden</SelectItem>
-                    {leeftijdOptions.map((leeftijd) => (
-                      <SelectItem key={leeftijd} value={leeftijd}>
-                        {leeftijd}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              )}
-
-              <div className="flex items-end lg:col-span-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  disabled={compareItems.length <= 1}
-                  onClick={() => removeCompareItem(item.id)}
-                >
-                  Verwijder
-                </Button>
-              </div>
-            </div>
+        <div className="flex max-h-80 flex-wrap gap-2 overflow-auto rounded-md border p-3">
+          {compareOptions.map((option) => (
+            <label
+              key={`${option.campaignId ?? baseCampaignId}-${option.value}`}
+              className="flex cursor-pointer items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm hover:bg-muted/50"
+            >
+              <input
+                type="checkbox"
+                checked={isOptionChecked(option)}
+                onChange={(e) => toggleOption(option, e.target.checked)}
+              />
+              {option.label}
+            </label>
           ))}
-        </div>
 
-        <Button type="button" variant="outline" onClick={addCompareItem}>
-          + Vergelijking toevoegen
-        </Button>
+          {!compareOptions.length && (
+            <div className="text-sm text-muted-foreground">
+              Geen opties gevonden voor deze vergelijking.
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -673,16 +666,8 @@ function CentrumView() {
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [compareMode, setCompareMode] = useState<CompareMode>("periode");
   const [campaignId, setCampaignId] = useState(campaigns[0].id);
-  const [compareItems, setCompareItems] = useState<DashboardCompareItem[]>([
-    createDefaultCompareItem("April", campaigns[0].id, {
-      dateFrom: "2026-04-01",
-      dateTo: "2026-04-30",
-    }),
-    createDefaultCompareItem("Mei", campaigns[0].id, {
-      dateFrom: "2026-05-01",
-      dateTo: "2026-05-31",
-    }),
-  ]);
+  const [compareCampaignId, setCompareCampaignId] = useState(campaigns[0].id);
+  const [compareItems, setCompareItems] = useState<DashboardCompareItem[]>([]);
 
   const selectedCampaign =
     campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
@@ -712,29 +697,14 @@ function CentrumView() {
     [data],
   );
 
-  const compareWinkelOptions = useMemo(
-    () =>
-      uniqueSorted(
-        campaigns.flatMap((campaign) =>
-          campaign.rows.map((row) => getRowStoreName(row))
-        )
-      ),
-    []
+  const compareBaseCampaign = useMemo(
+    () => campaigns.find((campaign) => campaign.id === compareCampaignId) ?? campaigns[0],
+    [compareCampaignId]
   );
 
-  const compareSegmentOptions = useMemo(
-    () => uniqueSorted(centrumNieuwVennep.stores.map((store) => store.segment)),
-    []
-  );
-
-  const compareLeeftijdOptions = useMemo(
-    () =>
-      uniqueSorted(
-        campaigns.flatMap((campaign) =>
-          campaign.rows.map((row) => row.leeftijdsgroep)
-        )
-      ),
-    []
+  const compareOptions = useMemo(
+    () => buildCompareOptions(compareMode, compareBaseCampaign),
+    [compareMode, compareBaseCampaign]
   );
 
   const filtered = useMemo(() => applyFilters(data, filters), [data, filters]);
@@ -747,19 +717,13 @@ function CentrumView() {
   const trend = useMemo(() => buildTrendFromRows(filtered), [filtered]);
 
   const comparisonData = useMemo(
-    () =>
-      buildComparisonData(
-        compareItems.map((item) => ({
-          ...item,
-          label: buildCompareItemLabel(item),
-        }))
-      ) as ComparisonDataItem[],
+    () => buildComparisonData(compareItems) as ComparisonDataItem[],
     [compareItems]
   );
 
   const compareTrend = useMemo(
-    () => buildComparisonTrend(comparisonData),
-    [comparisonData]
+    () => buildComparisonTrend(comparisonData, compareMode),
+    [comparisonData, compareMode]
   );
 
   const topWinkels = useMemo(() => {
@@ -847,7 +811,7 @@ function CentrumView() {
             <div>
               <h2 className="text-lg font-semibold">Vergelijken</h2>
               <p className="text-sm text-muted-foreground">
-                Vergelijk campagnes, maanden, winkels of segmenten. De vergelijkingen worden ook als lijnen in de grafiek getoond.
+                Vergelijk campagnes, maanden, winkels, segmenten of leeftijdsgroepen. De vergelijkingen worden ook als lijnen in de grafiek getoond.
               </p>
             </div>
 
@@ -865,13 +829,13 @@ function CentrumView() {
 
       {isCompareMode && (
         <ComparisonBuilder
-          compareItems={compareItems}
-          setCompareItems={setCompareItems}
           compareMode={compareMode}
           setCompareMode={setCompareMode}
-          winkelOptions={compareWinkelOptions}
-          segmentOptions={compareSegmentOptions}
-          leeftijdOptions={compareLeeftijdOptions}
+          baseCampaignId={compareCampaignId}
+          setBaseCampaignId={setCompareCampaignId}
+          compareOptions={compareOptions}
+          compareItems={compareItems}
+          setCompareItems={setCompareItems}
         />
       )}
 
@@ -960,7 +924,9 @@ function CentrumView() {
                         <TableCell className="font-medium">{item.label}</TableCell>
                         <TableCell>{campaign?.name ?? item.campaignId}</TableCell>
                         <TableCell>
-                          {item.filters.dateFrom || "..."} t/m {item.filters.dateTo || "..."}
+                          {item.compareMode === "periode"
+                            ? item.label
+                            : `${item.filters.dateFrom || "-"} t/m ${item.filters.dateTo || "-"}`}
                         </TableCell>
                         <TableCell>{item.filters.winkel || "Alle winkels"}</TableCell>
                         <TableCell>{item.filters.segment || "Alle segmenten"}</TableCell>
@@ -980,14 +946,14 @@ function CentrumView() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <ChartCard
-          title={isCompareMode ? "Aanmeldingen per week — vergelijking" : "Aanmeldingen per week"}
+          title={isCompareMode && compareMode === "periode" ? "Aanmeldingen per dag — vergelijking" : isCompareMode ? "Aanmeldingen per week — vergelijking" : "Aanmeldingen per week"}
           info="Op basis van 'datum_uitgeleverd'."
         >
           <div className="h-72">
             <ResponsiveContainer>
               <LineChart data={isCompareMode ? compareTrend : trend} margin={{ left: 0, right: 16, top: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                <XAxis dataKey={isCompareMode && compareMode === "periode" ? "dag" : "week"} tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
                 <RTooltip />
                 {isCompareMode && <Legend wrapperStyle={{ fontSize: 12 }} />}
@@ -996,8 +962,8 @@ function CentrumView() {
                     <Line
                       key={item.id}
                       type="monotone"
-                      dataKey={item.label}
-                      name={item.label}
+                      dataKey={getComparisonChartKey(item)}
+                      name={getComparisonChartKey(item)}
                       stroke={CHART_COLORS[i % CHART_COLORS.length]}
                       strokeWidth={2.5}
                       dot={false}
@@ -1152,7 +1118,7 @@ function WinkelierView() {
     campaigns.find((campaign) => campaign.id === campaignId) ?? campaigns[0];
   const data = selectedCampaign.rows;
 
-  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_inwissel)), [data]);
+  const winkels = useMemo(() => uniqueSorted(data.map((r) => r.winkel_uitgever)), [data]);
   const [winkel, setWinkel] = useState<string>("");
 
   useEffect(() => {
@@ -1166,7 +1132,7 @@ function WinkelierView() {
     }
   }, [winkel, winkels]);
 
-  const rows = useMemo(() => data.filter((r) => r.winkel_inwissel === winkel), [data, winkel]);
+  const rows = useMemo(() => data.filter((r) => r.winkel_uitgever === winkel), [data, winkel]);
   const won = rows.filter(isWon).length;
   const redeemed = rows.filter(isRedeemed).length;
   const claimed = rows.filter(isClaimed).length;
@@ -1176,7 +1142,6 @@ function WinkelierView() {
     const m = new Map<string, { key: string; type: string; waarde: string; gewonnen: number; ingewisseld: number }>();
 
     for (const r of rows) {
-      if (!r.coupon_type || !r.coupon_waarde) continue;
       const key = `${r.coupon_type} — ${r.coupon_waarde}`;
       const e = m.get(key) || { key, type: r.coupon_type, waarde: r.coupon_waarde, gewonnen: 0, ingewisseld: 0 };
       if (isWon(r)) e.gewonnen += 1;
@@ -1191,7 +1156,7 @@ function WinkelierView() {
     const byWeek = new Map<string, number>();
 
     for (const r of rows.filter(isRedeemed)) {
-      const d = r["Datum opgehaald"];
+      const d = r["datum_opgehaald"];
       if (!d) continue;
 
       const key = getWeekStart(d);
@@ -1220,7 +1185,7 @@ function WinkelierView() {
 
     const dayMap = new Map<string, number>();
     rows.filter(isRedeemed).forEach((r) => {
-      if (r["Datum opgehaald"]) dayMap.set(r["Datum opgehaald"], (dayMap.get(r["Datum opgehaald"]) || 0) + 1);
+      if (r["datum_opgehaald"]) dayMap.set(r["datum_opgehaald"], (dayMap.get(r["datum_opgehaald"]) || 0) + 1);
     });
     const peak = Array.from(dayMap.entries()).sort((a, b) => b[1] - a[1])[0];
     if (peak) list.push(`Piekdag: ${peak[0]} (${peak[1]} inwisselingen)`);

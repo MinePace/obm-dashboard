@@ -26,5 +26,33 @@
     "kanaal": "Onbekend",
     "datum_uitgeleverd": "2026-04-15",
     "datum_opgehaald": null
+  },
+  {
+    "status": "claimed",
+    "prijs_gewonnen": true,
+    "coupon_type": "15% korting Diner actie",
+    "coupon_waarde": null,
+    "winkel_inwissel": null,
+    "winkel_uitgever": "The Krishna Indian Restaurant 🇮🇳",
+    "leeftijdsgroep": "45-54",
+    "wat_is_uw_leeftijd": "51",
+    "wat_is_uw_geslacht": "Vrouw",
+    "kanaal": "Onbekend",
+    "datum_uitgeleverd": "2026-04-16",
+    "datum_opgehaald": null
+  },
+  {
+    "status": "claimed",
+    "prijs_gewonnen": true,
+    "coupon_type": "Paraplu naar keuze uit voorraad twv € 15,- per stuk",
+    "coupon_waarde": null,
+    "winkel_inwissel": null,
+    "winkel_uitgever": "Copy Partners",
+    "leeftijdsgroep": "18-24",
+    "wat_is_uw_leeftijd": "22",
+    "wat_is_uw_geslacht": "Man ",
+    "kanaal": "Onbekend",
+    "datum_uitgeleverd": "2026-04-1",
+    "datum_opgehaald": null
   }
 ]
