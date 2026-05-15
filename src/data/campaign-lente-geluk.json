@@ -54,5 +54,19 @@
     "kanaal": "Onbekend",
     "datum_uitgeleverd": "2026-04-1",
     "datum_opgehaald": null
+  },
+  {
+    "status": "claimed",
+    "prijs_gewonnen": true,
+    "coupon_type": "€5 korting",
+    "coupon_waarde": null,
+    "winkel_inwissel": null,
+    "winkel_uitgever": "Orries restaurant",
+    "leeftijdsgroep": "18-24",
+    "wat_is_uw_leeftijd": "22",
+    "wat_is_uw_geslacht": null,
+    "kanaal": "Onbekend",
+    "datum_uitgeleverd": "2026-04-23",
+    "datum_opgehaald": null
   }
 ]
