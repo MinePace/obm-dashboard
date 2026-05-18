@@ -1,27 +1,44 @@
 from pathlib import Path
 import pandas as pd
 import json
-from datetime import datetime
+from io import StringIO
 
 BASE_DIR = Path(__file__).parent
 
 csv_file = BASE_DIR / "WINkel Weken Nieuw-Vennep 12-05-2026 participants.csv"
-json_file = BASE_DIR / "campaign-test.json"
+json_file = BASE_DIR / "campaign-test-fixed.json"
 
-df = pd.read_csv(csv_file)
+def read_storetime_csv(path: Path) -> pd.DataFrame:
+    """
+    StoreTime export staat per regel nog een keer volledig tussen quotes.
+    Daardoor leest pandas alles als 1 kolom. Deze functie haalt die extra
+    buitenste quotes weg en zet dubbele quotes terug naar normale quotes.
+    """
+    raw = path.read_text(encoding="utf-8-sig")
+    cleaned_lines = []
 
-# Pas deze namen aan naar jouw CSV-kolommen
+    for line in raw.splitlines():
+        line = line.strip()
+
+        if len(line) >= 2 and line[0] == '"' and line[-1] == '"':
+            line = line[1:-1]
+
+        line = line.replace('""', '"')
+        cleaned_lines.append(line)
+
+    return pd.read_csv(StringIO("\n".join(cleaned_lines)))
+
+df = read_storetime_csv(csv_file)
+
 column_mapping = {
-    "status": "Status",
-    "prijs_gewonnen": "Prijs gewonnen",
+    "code": "code",
     "coupon_type": "prize",
-    "coupon_waarde": "Coupon waarde",
-    "winkel_inwissel": "Winkel inwissel",
+    "coupon_waarde": None,
+    "winkel_inwissel": None,
     "winkel_uitgever": "location",
-    "leeftijdsgroep": "Leeftijdsgroep",
     "wat_is_uw_leeftijd": "wat_is_uw_leeftijd?",
     "wat_is_uw_geslacht": "wat_is_uw_geslacht?",
-    "kanaal": "Kanaal",
+    "kanaal": None,
     "datum_uitgeleverd": "clamedAt",
     "datum_opgehaald": "collectedAt",
 }
@@ -29,17 +46,22 @@ column_mapping = {
 def empty_to_none(value):
     if pd.isna(value) or str(value).strip() == "":
         return None
-    return value
+    return str(value).strip()
 
-def parse_bool(value):
-    if pd.isna(value):
-        return False
-    return str(value).strip().lower() in ["true", "ja", "yes", "1"]
+def format_date(value):
+    if pd.isna(value) or str(value).strip() == "":
+        return None
+
+    dt = pd.to_datetime(value, dayfirst=True, errors="coerce")
+    if pd.isna(dt):
+        return None
+
+    return dt.strftime("%Y-%m-%d")
 
 def calculate_age_group(row):
-    age_col = column_mapping.get("wat_is_uw_leeftijd")
+    age_col = column_mapping["wat_is_uw_leeftijd"]
 
-    if not age_col or age_col not in row or pd.isna(row[age_col]):
+    if age_col not in row or pd.isna(row[age_col]):
         return "Onbekend"
 
     try:
@@ -49,7 +71,6 @@ def calculate_age_group(row):
 
     if age <= 0 or age > 120:
         return "Onbekend"
-
     if age < 18:
         return "<18"
     if age <= 24:
@@ -65,61 +86,49 @@ def calculate_age_group(row):
 
     return "65+"
 
+def has_value(row, csv_col):
+    return csv_col in row and not pd.isna(row[csv_col]) and str(row[csv_col]).strip() != ""
+
 def calculate_prijsgewonnen(row):
-    coupon_col = column_mapping.get("coupon_type")
-    if coupon_col and coupon_col in row:
-        return not pd.isna(row[coupon_col]) and str(row[coupon_col]).strip() != ""
-    return False
+    return has_value(row, column_mapping["coupon_type"])
 
 def calculate_status(row):
-    prijsgewonnen = calculate_prijsgewonnen(row)
+    if has_value(row, column_mapping["datum_opgehaald"]):
+        return "redeemed"
 
-    opgehaald_col = column_mapping.get("datum_opgehaald")
-    if opgehaald_col and opgehaald_col in row:
-        if not pd.isna(row[opgehaald_col]) and str(row[opgehaald_col]).strip() != "":
-            return "redeemed"
-
-    if prijsgewonnen:
+    if calculate_prijsgewonnen(row):
         return "claimed"
 
     return "registered"
-
-def format_date(value):
-    if pd.isna(value) or str(value).strip() == "":
-        return None
-
-    try:
-        dt = pd.to_datetime(value, dayfirst=True)
-        return dt.strftime("%Y-%m-%d")
-    except Exception:
-        return None
 
 records = []
 
 for _, row in df.iterrows():
     item = {}
 
-    # Direct gemapte velden
     for json_key, csv_col in column_mapping.items():
-        if json_key == "geboortedatum":
+        if csv_col is None:
+            item[json_key] = None
             continue
 
-        if csv_col in df.columns:
-            if json_key in ["datum_uitgeleverd", "datum_opgehaald"]:
-                item[json_key] = format_date(row[csv_col])
-            else:
-                item[json_key] = empty_to_none(row[csv_col])
-        else:
+        if csv_col not in df.columns:
             item[json_key] = None
+            continue
 
-    # Berekende velden
+        if json_key in ["datum_uitgeleverd", "datum_opgehaald"]:
+            item[json_key] = format_date(row[csv_col])
+        else:
+            item[json_key] = empty_to_none(row[csv_col])
+
     item["leeftijdsgroep"] = calculate_age_group(row)
     item["prijs_gewonnen"] = calculate_prijsgewonnen(row)
     item["status"] = calculate_status(row)
 
-    # Fallbacks
     if item["kanaal"] is None:
         item["kanaal"] = "Onbekend"
+
+    if item["winkel_inwissel"] is None:
+        item["winkel_inwissel"] = item["winkel_uitgever"]
 
     records.append(item)
 
@@ -128,3 +137,5 @@ with open(json_file, "w", encoding="utf-8") as f:
 
 print(f"JSON opgeslagen als: {json_file}")
 print(f"Aantal records: {len(records)}")
+print(f"Aantal gewonnen prijzen: {sum(1 for r in records if r['prijs_gewonnen'])}")
+print(f"Aantal opgehaald/ingewisseld: {sum(1 for r in records if r['status'] == 'redeemed')}")
