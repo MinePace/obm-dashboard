@@ -665,6 +665,7 @@ function CentrumView() {
   const [filters, setFilters] = useState<Filters>({});
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [compareMode, setCompareMode] = useState<CompareMode>("periode");
+  const [ageGenderMetric, setAgeGenderMetric] = useState<"claimed" | "won" | "redeemed">("won");
   const [campaignId, setCampaignId] = useState(campaigns[0].id);
   const [compareCampaignId, setCompareCampaignId] = useState(campaigns[0].id);
   const [compareItems, setCompareItems] = useState<DashboardCompareItem[]>([]);
@@ -742,28 +743,34 @@ function CentrumView() {
     return Array.from(m.values()).sort((a, b) => b.ingewisseld - a.ingewisseld);
   }, [filtered]);
 
+  const ageGenderPredicate = ageGenderMetric === "won" ? isWon : ageGenderMetric === "claimed" ? isClaimed : isRedeemed;
   const ageGender = useMemo(() => {
-    const ages = uniqueSorted(filtered.filter(isWon).map((r) => r.leeftijdsgroep));
+    const ages = uniqueSorted(filtered.filter(ageGenderPredicate).map((r) => r.leeftijdsgroep));
     const genderOrder = ["Man", "Vrouw", "Onbekend"];
 
     return ages.map((a) => {
       const row: Record<string, string | number> = { leeftijd: a };
+
       for (const gender of genderOrder) {
         row[gender] = filtered.filter(
-          (r) => isWon(r) && r.leeftijdsgroep === a && r.wat_is_uw_geslacht === gender,
+          (r) =>
+            ageGenderPredicate(r) &&
+            r.leeftijdsgroep === a &&
+            r.wat_is_uw_geslacht === gender
         ).length;
       }
+
       return row;
     });
-  }, [filtered]);
+  }, [filtered, ageGenderPredicate]);
 
   const genders = useMemo(() => {
     const preferredOrder = ["Man", "Vrouw", "Onbekend"];
 
     return preferredOrder.filter((gender) =>
-      filtered.some((r) => isWon(r) && r.wat_is_uw_geslacht === gender)
+      filtered.some((r) => ageGenderPredicate(r) && r.wat_is_uw_geslacht === gender)
     );
-  }, [filtered]);
+  }, [filtered, ageGenderPredicate]);
 
   const genderPieData = useMemo(() => {
     if (!filters.leeftijdsgroep) return [];
@@ -773,13 +780,13 @@ function CentrumView() {
         name: gender,
         value: filtered.filter(
           (r) =>
-            isWon(r) &&
+            ageGenderPredicate(r) &&
             r.leeftijdsgroep === filters.leeftijdsgroep &&
             r.wat_is_uw_geslacht === gender
         ).length,
       }))
       .filter((item) => item.value > 0);
-  }, [filtered, filters.leeftijdsgroep, genders]);
+  }, [filtered, filters.leeftijdsgroep, genders, ageGenderPredicate]);
 
   return (
     <div className="space-y-6">
@@ -997,7 +1004,22 @@ function CentrumView() {
               ? `Genderverdeling binnen ${filters.leeftijdsgroep}`
               : "Deelname per leeftijd × gender"
           }
-          info="Gewonnen coupons."
+          info={ageGenderMetric === "won" ? "Gewonnen coupons." : "Opgehaalde prijzen."}
+          action={
+            <Select
+              value={ageGenderMetric}
+              onValueChange={(v) => setAgeGenderMetric(v as "claimed" | "won" | "redeemed")}
+            >
+              <SelectTrigger className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="claimed">Ingewisseld</SelectItem>
+                <SelectItem value="won">Gewonnen</SelectItem>
+                <SelectItem value="redeemed">Opgehaald</SelectItem>
+              </SelectContent>
+            </Select>
+          }
         >
           <div className="h-72">
             <ResponsiveContainer>
