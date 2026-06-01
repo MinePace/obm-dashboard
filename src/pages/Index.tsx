@@ -859,15 +859,15 @@ function CentrumView() {
         />
         <Kpi
           label="Deelnemende winkels"
-          value={participatingStores.length.toLocaleString("nl-NL")}
+          value="29"
           hint="Aantal winkels dat meedoet aan deze campagne"
-          tone="accent"
+          tone="primary"
         />
         <Kpi
           label="Totaal prijzen"
           value="4976"
           hint="Totaal aantal prijzen binnen de lopende campagne"
-          tone="accent"
+          tone="primary"
         />
         <Kpi
           label="Coupons uitgegeven"
@@ -879,13 +879,13 @@ function CentrumView() {
           label="Coupons ingewisseld"
           value={claimed.toLocaleString("nl-NL")}
           hint="Totaal gebruikte coupons"
-          tone="primary"
+          tone="accent"
         />
         <Kpi
           label="Prijs gewonnen"
           value={won.toLocaleString("nl-NL")}
           hint="prijs_gewonnen of status claimed/redeemed"
-          tone="primary"
+          tone="accent"
         />
         <Kpi
           label="Prijs opgehaald"
@@ -897,7 +897,7 @@ function CentrumView() {
           label="Redeem rate"
           value={fmtPct(redeemRate)}
           hint="opgehaald ÷ gewonnen"
-          tone="success"
+          tone="accent"
         />
       </div>
 
@@ -967,6 +967,7 @@ function CentrumView() {
                 {isCompareMode ? (
                   comparisonData.map((item, i) => (
                     <Line
+                      isAnimationActive={false}
                       key={item.id}
                       type="monotone"
                       dataKey={getComparisonChartKey(item)}
@@ -977,7 +978,7 @@ function CentrumView() {
                     />
                   ))
                 ) : (
-                  <Line type="monotone" dataKey="aanmeldingen" stroke="#00E5AC" strokeWidth={2.5} dot={false} />
+                  <Line isAnimationActive={false} type="monotone" dataKey="aanmeldingen" stroke="#00E5AC" strokeWidth={2.5} dot={false} />
                 )}
               </LineChart>
             </ResponsiveContainer>
@@ -992,7 +993,7 @@ function CentrumView() {
                 <XAxis dataKey="segment" tick={{ fontSize: 11 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                 <RTooltip />
-                <Bar dataKey="count" name="Aantal winkels" fill="#0B0989" radius={[6, 6, 0, 0]} />
+                <Bar isAnimationActive={false} dataKey="count" name="Aantal winkels" fill="#0B0989" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1026,6 +1027,7 @@ function CentrumView() {
               {filters.leeftijdsgroep ? (
                 <PieChart>
                   <Pie
+                    isAnimationActive={false}
                     data={genderPieData}
                     dataKey="value"
                     nameKey="name"
@@ -1050,7 +1052,8 @@ function CentrumView() {
                   <RTooltip />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   {genders.map((g, i) => (
-                    <Bar
+                    <Bar 
+                      isAnimationActive={false}
                       key={g}
                       dataKey={g}
                       stackId="a"
@@ -1093,7 +1096,7 @@ function CentrumView() {
               <XAxis type="number" tick={{ fontSize: 11 }} />
               <YAxis dataKey="winkel" type="category" tick={{ fontSize: 11 }} width={140} />
               <RTooltip />
-              <Bar dataKey="ingewisseld" fill="#0B0989" radius={[0, 6, 6, 0]} />
+              <Bar isAnimationActive={false} dataKey="ingewisseld" fill="#0B0989" radius={[0, 6, 6, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
