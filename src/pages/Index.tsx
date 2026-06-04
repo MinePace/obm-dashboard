@@ -865,13 +865,13 @@ function CentrumView() {
         />
         <Kpi
           label="Totaal prijzen"
-          value="4976"
+          value="4.976"
           hint="Totaal aantal prijzen binnen de lopende campagne"
           tone="primary"
         />
         <Kpi
           label="Coupons uitgegeven"
-          value={selectedCampaign.totalCouponsIssued.toLocaleString("nl-NL")}
+          value="11.150"
           hint="Totaal aantal uitgegeven coupons"
           tone="primary"
         />
