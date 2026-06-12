@@ -89,15 +89,15 @@ Tijdens deze transformatie worden de gegevens opgeschoond en omgezet naar een st
 
 De dataset bevat onder andere:
 
-* Deelnemersgegevens;
-* Ondernemers;
-* Gewonnen prijzen;
-* Opgehaalde prijzen;
-* Leeftijdsgroepen;
-* Geslacht;
-* Datums van deelname;
-* Datums van ophalen;
-* Campagne-informatie.
+* Deelnemersgegevens
+* Ondernemers
+* Gewonnen prijzen
+* Opgehaalde prijzen
+* Leeftijdsgroepen
+* Geslacht
+* Datums van deelname
+* Datums van ophalen
+* Campagne-informatie
 
 Hoewel de gegevens afkomstig zijn uit de werkelijke pilot, vindt het inladen momenteel nog handmatig plaats. Nieuwe gegevens worden eerst geëxporteerd vanuit StoreTime en vervolgens opnieuw verwerkt met het Python-script voordat het dashboard wordt bijgewerkt.
 
