@@ -2,7 +2,7 @@
 
 ## Over het project
 
-Dit project is ontwikkeld als onderdeel van een afstudeer-/schoolopdracht in samenwerking met OBM voor de StoreTime-pilot in Centrum Nieuw-Vennep.
+Dit project is ontwikkeld als onderdeel van een schoolopdracht in samenwerking met OBM voor de StoreTime-pilot in Centrum Nieuw-Vennep.
 
 Het doel van dit prototype is om campagnegegevens inzichtelijk te maken voor zowel ondernemers als centrummanagement. Tijdens de pilot bleek dat de bestaande StoreTime-omgeving beperkte mogelijkheden bood voor het analyseren van campagneprestaties. Daarom is een dashboardconcept ontwikkeld dat laat zien hoe campagnegegevens kunnen worden omgezet naar bruikbare managementinformatie.
 
