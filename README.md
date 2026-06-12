@@ -81,20 +81,28 @@ In een toekomstige implementatie wordt verwacht dat ondernemers uitsluitend toeg
 
 ## Gebruikte data
 
-Tijdens de ontwikkeling is gebruikgemaakt van dummydata.
+Voor de ontwikkeling van het dashboard wordt gebruikgemaakt van werkelijke campagnegegevens afkomstig uit de StoreTime-pilot.
+
+De gegevens worden geëxporteerd vanuit StoreTime naar een Excel-bestand. Vervolgens wordt met behulp van een Python-script de export getransformeerd naar een JSON-bestand dat door de webapplicatie kan worden ingelezen.
+
+Tijdens deze transformatie worden de gegevens opgeschoond en omgezet naar een structuur die geschikt is voor gebruik binnen het dashboard.
 
 De dataset bevat onder andere:
 
-* Ondernemers
-* Prijzen
-* Leeftijdsgroepen
-* Geslacht
-* Campagnedeelname
-* Gewonnen prijzen
-* Opgehaalde prijzen
-* Datums van uitgifte en ophalen
+* Deelnemersgegevens;
+* Ondernemers;
+* Gewonnen prijzen;
+* Opgehaalde prijzen;
+* Leeftijdsgroepen;
+* Geslacht;
+* Datums van deelname;
+* Datums van ophalen;
+* Campagne-informatie.
 
-De dummydata is gebruikt om dashboardfunctionaliteiten te ontwikkelen voordat voldoende campagnegegevens beschikbaar waren.
+Hoewel de gegevens afkomstig zijn uit de werkelijke pilot, vindt het inladen momenteel nog handmatig plaats. Nieuwe gegevens worden eerst geëxporteerd vanuit StoreTime en vervolgens opnieuw verwerkt met het Python-script voordat het dashboard wordt bijgewerkt.
+
+Deze werkwijze maakt het mogelijk om tijdens de ontwikkeling met actuele campagnegegevens te werken zonder directe koppeling met de StoreTime-database.
+
 
 ---
 
